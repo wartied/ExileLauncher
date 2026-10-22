@@ -1,0 +1,17 @@
+# Build output
+/target/
+
+# Editors and OS clutter
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Leftovers from interrupted downloads or atomic writes
+*.part-*
+*.tmp
+
+# Local test data (EXILE_HOME pointed inside the repo)
+/home/

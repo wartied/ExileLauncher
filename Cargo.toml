@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["crates/launcher"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Keep debug builds responsive: optimize dependencies (image decoding, zip, hashing)
+[profile.dev.package."*"]
+opt-level = 2

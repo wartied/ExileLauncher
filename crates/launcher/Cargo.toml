@@ -1,0 +1,31 @@
+[package]
+name = "exile-launcher"
+version = "0.1.0"
+edition = "2024"
+description = "Exile Launcher - a fast, native Minecraft launcher"
+license = "GPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "exile"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.23"
+directories = "6"
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+getrandom = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+open = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.11"
+sha2 = "0.11"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+toml = "1"
+ureq = { version = "3", features = ["json"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

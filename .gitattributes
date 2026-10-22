@@ -1,0 +1,7 @@
+# Normalise line endings so Windows and Linux checkouts produce identical commits.
+* text=auto eol=lf
+
+# Never touch binary assets.
+*.ttf binary
+*.png binary
+*.ico binary
