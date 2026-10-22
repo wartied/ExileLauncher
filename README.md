@@ -1,4 +1,4 @@
-# Exile
+# Exile Launcher
 
 A fast, native Minecraft: Java Edition launcher written in Rust. A performance client is planned next.
 
