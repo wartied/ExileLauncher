@@ -1,4 +1,4 @@
-# Exile
+# Exile Launcher
 
 A performance-first Minecraft: Java Edition launcher and client.
 
