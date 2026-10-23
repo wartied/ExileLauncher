@@ -1,0 +1,25 @@
+// Minimal, independent implementation of the Mod Menu API interfaces
+// (com.terraformersmc.modmenu.api), so mods that offer a config screen
+// through Mod Menu work with Exile's mod list without Mod Menu installed.
+// It declares the mod id "modmenu" at version 0.0.0: if the real Mod Menu is
+// installed, Fabric Loader keeps the real one and drops this shim.
+plugins {
+	id 'net.fabricmc.fabric-loom'
+}
+
+version = '0.0.0+exile'
+base { archivesName = 'exile-modmenu-api' }
+
+dependencies {
+	minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${rootProject.loader_version}"
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+}
+
+// The shim is only a library nested in Exile's jar: never launch the game from it.
+// (Otherwise `gradlew runClient` would start a second game alongside the real one.)
+tasks.matching { it.name.startsWith('run') }.configureEach { enabled = false }

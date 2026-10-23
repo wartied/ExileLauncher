@@ -137,6 +137,9 @@ pub struct Artifact {
 #[serde(rename_all = "camelCase")]
 pub struct JavaVersion {
     pub component: String,
+    /// Java major version the runtime provides (8, 17, 21, 25, ...).
+    #[serde(default)]
+    pub major_version: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "modmenu",
+  "version": "0.0.0+exile",
+  "name": "Mod Menu API (Exile)",
+  "description": "Lets mods' config screens open from Exile's mod list. Replaced automatically if the real Mod Menu is installed.",
+  "license": "GPL-3.0-only",
+  "environment": "client",
+  "custom": { "modmenu": { "badges": ["library"], "parent": "exile" } }
+}

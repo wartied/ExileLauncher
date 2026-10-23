@@ -158,6 +158,10 @@ pub fn scan(inst: &Instance, list: &ModList) -> Vec<ModView> {
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_owned();
+            // The launcher manages the Exile Client jar itself.
+            if name.starts_with(crate::client::FILE_NAME) {
+                return None;
+            }
             if let Some(base) = name.strip_suffix(DISABLED_SUFFIX) {
                 base.ends_with(".jar").then(|| (base.to_owned(), false))
             } else {

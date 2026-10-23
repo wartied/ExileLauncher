@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "package": "dev.exile.client.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "CameraMixin",
+    "EntityMixin",
+    "FontProviderMixin",
+    "FramerateLimitTrackerMixin",
+    "GameRendererMixin",
+    "MinecraftMixin",
+    "MouseHandlerMixin",
+    "PauseScreenMixin",
+    "ToastManagerAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,7 +1,11 @@
 # Normalise line endings so Windows and Linux checkouts produce identical commits.
 * text=auto eol=lf
 
+# Windows batch files need CRLF (cmd misreads labels in LF files).
+*.bat text eol=crlf
+
 # Never touch binary assets.
+*.jar binary
 *.ttf binary
 *.png binary
 *.ico binary

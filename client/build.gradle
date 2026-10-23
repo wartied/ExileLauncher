@@ -1,0 +1,78 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+base { archivesName = 'exile-client' }
+
+repositories {
+	exclusiveContent {
+		forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }
+		filter { includeGroup 'maven.modrinth' }
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Mod Menu API shim, nested in the jar (see modmenu-shim/).
+	include project(':modmenu-shim')
+	implementation project(':modmenu-shim')
+
+	// Dev runs only: test against the performance mods the launcher installs.
+	if (!project.hasProperty('vanillaRun')) {
+		localRuntime "maven.modrinth:sodium:${project.sodium_version}"
+		localRuntime "maven.modrinth:lithium:${project.lithium_version}"
+	}
+	// Candidate companion under evaluation: -PferriteRun
+	if (project.hasProperty('ferriteRun')) {
+		localRuntime "maven.modrinth:ferrite-core:${project.ferritecore_version}"
+	}
+}
+
+// Splits on whitespace; single or double quotes keep an argument with spaces together.
+static List<String> splitArgs(Object value) {
+	def matcher = value.toString() =~ /"([^"]*)"|'([^']*)'|(\S+)/
+	matcher.collect { m -> m[1] ?: m[2] ?: m[3] }
+}
+
+loom {
+	runs {
+		client {
+			property 'exile.dev', 'true'
+			// Fixed window size so bench runs are comparable.
+			programArgs '--width', '1600', '--height', '900'
+			// Extra JVM args for bench/A-B runs: ./gradlew runClient -PexileArgs="-Dexile.bench=auto ..."
+			if (project.hasProperty('exileArgs')) {
+				vmArgs(*splitArgs(project.property('exileArgs')))
+			}
+			// e.g. -PexileProgramArgs="--quickPlaySingleplayer 'Exile Bench'" to jump straight into a world
+			if (project.hasProperty('exileProgramArgs')) {
+				programArgs(*splitArgs(project.property('exileProgramArgs')))
+			}
+		}
+	}
+}
+
+processResources {
+	def version = project.version
+	inputs.property 'version', version
+	filesMatching('fabric.mod.json') { expand 'version': version }
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	from('../LICENSE') { rename { "LICENSE_exile-client" } }
+}

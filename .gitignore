@@ -4,6 +4,7 @@
 # Editors and OS clutter
 .vscode/
 .idea/
+*.iml
 *.swp
 .DS_Store
 Thumbs.db
@@ -15,3 +16,24 @@ desktop.ini
 
 # Local test data (EXILE_HOME pointed inside the repo)
 /home/
+
+# Exile Client (Gradle, Fabric Loom)
+/client/**/build/
+/client/**/.gradle/
+# Game folders from dev runs (worlds, logs, options), in any subproject
+/client/**/run/
+/client/**/remappedSrc/
+# Eclipse / VS Code Java output and project files
+/client/**/bin/
+/client/**/out/
+.classpath
+.project
+.settings/
+.factorypath
+
+# JVM crash and replay logs
+hs_err_pid*.log
+replay_pid*.log
+
+# Python caches from client/tools
+__pycache__/

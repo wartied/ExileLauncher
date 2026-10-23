@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "exile",
+  "version": "${version}",
+  "name": "Exile Client",
+  "description": "Performance-first client: measured optimisations, a minimal HUD, Frame Budget and Exile Bench.",
+  "authors": ["The Exile contributors"],
+  "license": "GPL-3.0-only",
+  "icon": "assets/exile/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.exile.client.ExileClient"]
+  },
+  "mixins": ["exile.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.0",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  },
+  "recommends": {
+    "sodium": "*",
+    "lithium": "*"
+  }
+}

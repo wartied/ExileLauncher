@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod aot;
 mod app;
 mod auth;
+mod client;
 mod install;
 mod instance;
 mod java;

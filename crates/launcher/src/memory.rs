@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(with_mods(base, 8).recommended_mb, base.recommended_mb);
         let pack = with_mods(base, 150);
         assert_eq!(pack.recommended_mb, base.recommended_mb + 4096);
-        assert!(pack.min_mb > base.min_mb && pack.min_mb % STEP_MB == 0);
+        assert!(pack.min_mb > base.min_mb && pack.min_mb.is_multiple_of(STEP_MB));
         assert!(pack.max_useful_mb <= 16384);
     }
 

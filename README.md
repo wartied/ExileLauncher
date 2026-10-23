@@ -1,25 +1,40 @@
 # Exile
 
-A fast, native Minecraft: Java Edition launcher written in Rust. A performance client is planned next.
+A performance-first Minecraft: Java Edition launcher and client.
+
+Exile has two parts that work together but live separately:
+
+- **Exile Launcher** (Rust, `crates/launcher`): a fast native launcher.
+- **Exile Client** (Java, Fabric mod, `client/`): measured optimisations, a minimal HUD, Frame Budget and
+  Exile Bench. See [client/README.md](client/README.md). The launcher bundles it and installs it when you
+  press Play; it also works on its own in any Fabric launcher.
+
+## Launcher
 
 - **Native and light.** No web view and no Electron. The UI is drawn with egui, uses no CPU while idle, and ships as one ~9 MB executable.
 - **Every version from 1.7.2 on**, each in its own instance with its own worlds, settings and mods. Several instances can run at once.
 - **Safe memory handling.** Memory limits depend on the version and on how many mods it has, Windows always keeps a reserve, and a game won't start if everything running wouldn't fit in your RAM.
 - **Mods.** One-click Fabric setup, then search and install mods from Modrinth (and CurseForge, with an API key). Dependencies install automatically, and conflicts, missing dependencies and hardware limits are flagged.
 - **Microsoft sign-in.** Players sign in through Microsoft's own login page, and Exile checks the account owns Minecraft before the game can start.
+- **Tuned Java settings.** On Java 25 it uses compact object headers, and on machines with spare cores the ZGC collector. Measured with Exile Bench, that cuts the worst stutters (0.1% low FPS) by about 2.5× compared with Mojang's default G1 settings.
+- **Startup cache.** On Java 25 (Minecraft 26.x) the first launch of an instance records which classes the game loads, and Exile builds a Java AOT cache from that in the background. Later launches reach the menu about 8% sooner (9.1 s to 8.4 s with Fabric, Sodium, Lithium and Exile Client). Costs: closing the game takes about a minute longer once per setup, and the cache uses about 140 MB of disk per instance.
 
 ```
 crates/
-  launcher/   Exile Launcher
+  launcher/   Exile Launcher (Rust)
+client/       Exile Client (Java, Gradle)
 ```
 
 ## Build and run
 
-Requires a recent stable Rust toolchain.
+Requires a recent stable Rust toolchain, and JDK 25 for the client.
 
 ```
+cd client && ./gradlew build && cd ..     # build the client first, so the launcher can bundle it
 cargo run --release -p exile-launcher
 ```
+
+If `client/build/libs` has no jar, the launcher still builds, just without the Exile Client option.
 
 The binary is `target/release/exile.exe`. Release builds don't open a console window. Java doesn't need
 to be installed: Exile downloads the exact runtime Mojang ships for each Minecraft version.

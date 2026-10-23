@@ -23,6 +23,9 @@ pub struct Instance {
     pub created: u64,
     #[serde(default)]
     pub last_played: Option<u64>,
+    /// Exile Client is installed into this instance at every launch.
+    #[serde(default)]
+    pub client: bool,
     /// Mod loader, if mods are enabled. Kept last: TOML tables must follow
     /// plain values.
     #[serde(default, skip_serializing_if = "Option::is_none")]

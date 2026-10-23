@@ -94,7 +94,7 @@ struct ModJob {
 }
 
 enum Dialog {
-    NewInstance { name: String, search: String, version: Option<String> },
+    NewInstance { name: String, search: String, version: Option<String>, client: bool },
     Rename { id: String, name: String },
     Delete { id: String },
     ConfirmLaunch { id: String, message: String },
@@ -153,6 +153,8 @@ pub struct ExileApp {
     search_seq: u64,
     /// OpenGL renderer string, read once from the launcher's own context.
     gpu: Option<String>,
+    /// Instances waiting for Fabric before Exile Client's companion mods install.
+    client_setup: HashSet<String>,
 }
 
 impl ExileApp {
@@ -192,6 +194,7 @@ impl ExileApp {
             loader_jobs: HashSet::new(),
             search_seq: 0,
             gpu: None,
+            client_setup: HashSet::new(),
         };
         if let Some(id) = app.selected.clone() {
             app.refresh_mods(&id);
@@ -328,7 +331,7 @@ impl ExileApp {
 
     // -- Instances ----------------------------------------------------------
 
-    fn create_instance(&mut self, name: String, entry: ManifestEntry) {
+    fn create_instance(&mut self, name: String, entry: ManifestEntry, with_client: bool) {
         let needs = memory::needs_for(&entry.release_time);
         let limits = memory::limits(self.sys.total_mb, needs);
         let name = if name.trim().is_empty() { entry.id.clone() } else { name.trim().to_owned() };
@@ -340,6 +343,7 @@ impl ExileApp {
             memory_mb: limits.recommended_mb,
             created: unix_now(),
             last_played: None,
+            client: with_client,
             loader: None,
         };
         if let Err(e) = inst.save() {
@@ -349,7 +353,13 @@ impl ExileApp {
         let id = inst.id.clone();
         self.instances.insert(0, inst);
         self.select(Some(id.clone()));
-        self.start_task(&id, None);
+        if with_client {
+            // Fetch Fabric first; the single install task (game + loader) and the
+            // companion mods start once its version is known (see LoaderReady).
+            self.setup_client(&id);
+        } else {
+            self.start_task(&id, None);
+        }
     }
 
     /// Memory limits for an instance on this machine, including the extra
@@ -441,6 +451,12 @@ impl ExileApp {
                 match (launch_heap, auth) {
                     (Some(heap_mb), Some(auth)) => {
                         progress.set_stage("Starting Minecraft");
+                        // The bundled client is written fresh each launch, so it always matches the launcher.
+                        if inst.client {
+                            crate::client::install(&inst.mods_dir())?;
+                        } else {
+                            crate::client::remove(&inst.mods_dir());
+                        }
                         let child = launch::spawn(&inst, heap_mb, &auth)?;
                         Ok(TaskOutcome::Launched { child, heap_mb })
                     }
@@ -541,7 +557,13 @@ impl ExileApp {
                     match outcome {
                         TaskOutcome::Installed | TaskOutcome::Cancelled => {}
                         TaskOutcome::Launched { child, heap_mb } => {
-                            self.games.add(id.clone(), heap_mb, child);
+                            let recording_log = self
+                                .instances
+                                .iter()
+                                .find(|i| i.id == id)
+                                .filter(|i| crate::aot::recording(i))
+                                .map(Instance::output_log);
+                            self.games.add(id.clone(), heap_mb, child, recording_log);
                             if let Some(inst) = self.instance_mut(&id) {
                                 inst.last_played = Some(unix_now());
                                 let _ = inst.save();
@@ -563,6 +585,9 @@ impl ExileApp {
         if self.last_poll.elapsed() >= Duration::from_secs(1) {
             self.last_poll = Instant::now();
             for exited in self.games.poll() {
+                if let Some(inst) = self.instances.iter().find(|i| i.id == exited.instance_id) {
+                    self.games.build_aot_cache(inst, exited.heap_mb);
+                }
                 self.last_exit.insert(exited.instance_id.clone(), exited);
             }
         }
@@ -730,8 +755,8 @@ impl ExileApp {
                 (format!("{:.0}%", f * 100.0), TEXT_DIM)
             });
         }
-        if self.games.is_running(id) {
-            return Some(("Running".into(), ACCENT));
+        if let Some(g) = self.games.get(id) {
+            return Some(if g.saving_cache { ("Finishing".into(), TEXT_DIM) } else { ("Running".into(), ACCENT) });
         }
         if self.errors.contains_key(id) {
             return Some(("Error".into(), DANGER));
@@ -763,6 +788,7 @@ impl ExileApp {
             for inst in &self.instances {
                 let selected = self.selected.as_deref() == Some(inst.id.as_str());
                 let subtitle = match &inst.loader {
+                    Some(_) if inst.client => format!("Minecraft {} · Exile", inst.version),
                     Some(l) => format!("Minecraft {} · {}", inst.version, l.kind.name()),
                     None => format!("Minecraft {}", inst.version),
                 };
@@ -791,7 +817,7 @@ impl ExileApp {
             Versions::Ready(list) => list.iter().find(|v| v.is_release()).map(|v| v.id.clone()),
             _ => None,
         };
-        self.dialog = Some(Dialog::NewInstance { name: String::new(), search: String::new(), version: latest });
+        self.dialog = Some(Dialog::NewInstance { name: String::new(), search: String::new(), version: latest, client: true });
     }
 
     fn details(&mut self, ui: &mut Ui) {
@@ -800,7 +826,7 @@ impl ExileApp {
             return;
         };
         let id = inst.id.clone();
-        let running = self.games.get(&id).map(|g| g.used_mb);
+        let running = self.games.get(&id).map(|g| (g.used_mb, g.saving_cache));
         let task = self.tasks.get(&id).map(|t| t.progress.clone());
         let signed_in = self.session().is_some();
         let limits = self.limits_for(&inst);
@@ -844,12 +870,17 @@ impl ExileApp {
                 if widgets::button(ui, "Cancel").clicked() {
                     p.cancel.store(true, Ordering::Relaxed);
                 }
-            } else if let Some(used_mb) = running {
+            } else if let Some((used_mb, saving_cache)) = running {
                 ui.horizontal(|ui| {
-                    widgets::status_dot(ui, ACCENT);
+                    widgets::status_dot(ui, if saving_cache { TEXT_DIM } else { ACCENT });
                     let used = if used_mb > 0 { format!(" · using {}", fmt_mb(used_mb)) } else { String::new() };
-                    ui.label(RichText::new(format!("Running{used}")).color(TEXT));
+                    let status = if saving_cache { "Saving startup cache" } else { "Running" };
+                    ui.label(RichText::new(format!("{status}{used}")).color(TEXT));
                 });
+                if saving_cache {
+                    ui.add_space(2.0);
+                    ui.label(RichText::new("Takes about a minute, once. Later launches start faster.").color(TEXT_DIM));
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if widgets::button(ui, "Force close").clicked() {
@@ -905,6 +936,10 @@ impl ExileApp {
             ui.add_space(16.0);
             match self.tab {
                 Tab::Overview => {
+                    if crate::client::supports(&inst.version) {
+                        self.client_card(ui, &inst, running.is_some() || task.is_some());
+                        ui.add_space(20.0);
+                    }
                     self.memory_card(ui, &inst, limits, running.is_some());
                     ui.add_space(20.0);
                     self.manage_card(ui, &inst, running.is_some() || task.is_some());
@@ -966,6 +1001,39 @@ impl ExileApp {
                 }
             }
         });
+    }
+
+    /// Exile Client on/off for versions the bundled client supports.
+    fn client_card(&mut self, ui: &mut Ui, inst: &Instance, busy: bool) {
+        widgets::section_label(ui, "Exile Client");
+        ui.add_space(2.0);
+        let mut on = inst.client;
+        widgets::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                widgets::toggle(ui, &mut on, !busy);
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let version = crate::client::version().unwrap_or("");
+                    ui.label(RichText::new(format!("Exile Client {version}")).color(TEXT));
+                    ui.label(
+                        RichText::new("Measured performance tweaks, a minimal HUD and Frame Budget. In game, open it from the pause menu or with Right Shift.")
+                            .size(12.0)
+                            .color(TEXT_DIM),
+                    );
+                });
+            });
+        });
+        if on != inst.client {
+            let id = inst.id.clone();
+            if let Some(i) = self.instance_mut(&id) {
+                i.client = on;
+                let _ = i.save();
+            }
+            if on {
+                self.setup_client(&id);
+            }
+        }
     }
 
     fn manage_card(&mut self, ui: &mut Ui, inst: &Instance, busy: bool) {
@@ -1115,7 +1183,7 @@ impl ExileApp {
                 }
                 keep = !(stop || cancel || r.should_close());
             }
-            Dialog::NewInstance { name, search, version } => {
+            Dialog::NewInstance { name, search, version, client } => {
                 let mut create = None;
                 let mut retry = false;
                 let mut show_snapshots = self.settings.show_snapshots;
@@ -1220,6 +1288,24 @@ impl ExileApp {
                             "This computer doesn't have enough memory to run this version.".to_owned()
                         };
                         ui.label(RichText::new(text).size(12.0).color(if limits.fits { TEXT_FAINT } else { DANGER }));
+                        if crate::client::supports(&e.id) {
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                widgets::toggle(ui, client, true);
+                                ui.add_space(4.0);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    ui.label(RichText::new("Exile Client").color(TEXT));
+                                    ui.label(
+                                        RichText::new("Performance, HUD and Frame Budget. Also installs Fabric, Sodium and Lithium.")
+                                            .size(12.0)
+                                            .color(TEXT_FAINT),
+                                    );
+                                });
+                            });
+                        } else if let Some(v) = crate::client::minecraft_version() {
+                            ui.label(RichText::new(format!("Exile Client is available for Minecraft {v}.")).size(12.0).color(TEXT_FAINT));
+                        }
                     }
 
                     let mut cancel = false;
@@ -1243,7 +1329,8 @@ impl ExileApp {
                 }
                 keep = !(r.inner || r.should_close());
                 if let Some(entry) = create {
-                    self.create_instance(std::mem::take(name), entry);
+                    let with_client = *client && crate::client::supports(&entry.id);
+                    self.create_instance(std::mem::take(name), entry, with_client);
                     keep = false;
                 }
             }

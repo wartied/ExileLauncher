@@ -44,6 +44,43 @@ impl ExileApp {
         });
     }
 
+    /// Turns Exile Client on for an instance: Fabric first if needed, then
+    /// the companion mods it is built to run with.
+    pub(super) fn setup_client(&mut self, id: &str) {
+        let Some(inst) = self.instances.iter().find(|i| i.id == id).cloned() else { return };
+        if inst.loader.is_none() {
+            self.client_setup.insert(id.to_owned());
+            if !self.loader_jobs.contains(id) {
+                self.add_fabric(id);
+            }
+        } else {
+            self.install_companions(id);
+        }
+    }
+
+    fn install_companions(&mut self, id: &str) {
+        let installed: HashSet<String> = self
+            .mods
+            .get(id)
+            .map(|c| c.list.mods.iter().map(|m| m.slug.clone()).collect())
+            .unwrap_or_default();
+        for (slug, title) in crate::client::COMPANIONS {
+            if installed.contains(*slug) {
+                continue;
+            }
+            let hit = SearchHit {
+                source: Source::Modrinth,
+                project_id: (*slug).to_owned(),
+                slug: (*slug).to_owned(),
+                title: (*title).to_owned(),
+                author: String::new(),
+                description: String::new(),
+                downloads: 0,
+            };
+            self.start_mod_install(id, hit);
+        }
+    }
+
     fn open_add_mods(&mut self, id: &str) {
         self.dialog = Some(Dialog::AddMods(Box::new(ModBrowser {
             instance_id: id.to_owned(),
@@ -153,6 +190,9 @@ impl ExileApp {
                         // Download the loader's libraries now, not at first launch.
                         self.start_task(&instance_id, None);
                         self.refresh_mods(&instance_id);
+                        if self.client_setup.remove(&instance_id) {
+                            self.install_companions(&instance_id);
+                        }
                     }
                     Err(e) => self.push_notice(&instance_id, DANGER, format!("Couldn't set up Fabric: {e}")),
                 }
