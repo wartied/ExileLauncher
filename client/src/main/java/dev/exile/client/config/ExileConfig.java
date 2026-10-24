@@ -40,6 +40,10 @@ public final class ExileConfig {
 		/** Position as a fraction (0..1) of the free space, so layouts survive resizing. */
 		public float x;
 		public float y;
+		/** Size relative to normal (0.5..2). */
+		public float scale = 1f;
+		/** What to show, for elements that offer a choice: "full", "icon" or "text". */
+		public String mode = "full";
 
 		public HudSlot() {}
 
@@ -73,6 +77,19 @@ public final class ExileConfig {
 		public boolean slimArmour = false;
 		/** Don't draw your own armour (only on this client). */
 		public boolean invisibleArmour = false;
+
+		/** See as far underwater as in air. */
+		public boolean clearWater = false;
+		/** See through lava. */
+		public boolean clearLava = false;
+		/** Fire on the screen sits lower, out of the middle. */
+		public boolean lowFire = false;
+		/** The first-person shield sits lower. */
+		public boolean lowShield = false;
+		/** Everything lit as if in full light. */
+		public boolean fullbright = false;
+		/** Vanilla menus: "vanilla", "dark" or "exile". */
+		public String menuTheme = "vanilla";
 	}
 
 	public static final class Performance {
@@ -123,6 +140,11 @@ public final class ExileConfig {
 		performance.backgroundFps = Math.clamp(performance.backgroundFps, 5, 120);
 		performance.governorTargetFps = Math.clamp(performance.governorTargetFps, 30, 360);
 		features.zoomLevel = Math.clamp(features.zoomLevel, 2, 10);
+		if (features.menuTheme == null) features.menuTheme = "vanilla";
+		for (HudSlot slot : hud.values()) {
+			if (slot.mode == null) slot.mode = "full";
+			slot.scale = Float.isFinite(slot.scale) && slot.scale > 0 ? Math.clamp(slot.scale, 0.5f, 2f) : 1f;
+		}
 		if (layoutVersion < 2) {
 			// Version 2 stacks the left column from the top corner (the layout
 			// keeps elements from overlapping, so they line up evenly at every

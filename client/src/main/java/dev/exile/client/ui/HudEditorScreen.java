@@ -14,16 +14,22 @@ import net.minecraft.network.chat.Component;
 /**
  * HUD layout editor: drag elements to move them. They snap to the screen
  * edges and centre lines; positions are stored as fractions of the screen so
- * the layout survives window and GUI-scale changes.
+ * the layout survives window and GUI-scale changes. Click an element to
+ * select it, then resize it (or scroll over it) and pick what it shows.
  */
 public final class HudEditorScreen extends Screen {
 	private static final int SNAP = 4;
+	private static final float[] SIZES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
 	private final Screen parent;
 	private final Ui ui = new Ui();
 	private final int[] box = new int[4];
 	/** Where each element was drawn last frame (see ExileHud.layout), for hit-testing. */
 	private final int[][] boxes = ExileHud.newBoxes();
 	private HudElement dragging;
+	/** The element the toolbar's size and mode controls apply to. */
+	private HudElement selected;
+	/** The toolbar's area last frame: clicks there don't change the selection. */
+	private final int[] toolbar = new int[4];
 	private int grabX, grabY;
 	private boolean mouseDown;
 	private boolean snappedX, snappedY;
@@ -38,10 +44,13 @@ public final class HudEditorScreen extends Screen {
 		if (event.button() != InputConstants.MOUSE_BUTTON_LEFT) return true;
 		ui.press(event.x(), event.y());
 		mouseDown = true;
+		if (inside(toolbar, event.x(), event.y())) return true;
+		selected = null;
 		for (int i = 0; i < ExileHud.ELEMENTS.size(); i++) {
 			int[] b = boxes[i];
-			if (b[2] > 0 && event.x() >= b[0] && event.y() >= b[1] && event.x() < b[0] + b[2] && event.y() < b[1] + b[3]) {
+			if (inside(b, event.x(), event.y())) {
 				dragging = ExileHud.ELEMENTS.get(i);
+				selected = dragging;
 				// Grab it where it was shown, which may differ from its stored
 				// position if it was making way for another element.
 				grabX = (int) event.x() - b[0];
@@ -51,6 +60,33 @@ public final class HudEditorScreen extends Screen {
 			}
 		}
 		return true;
+	}
+
+	/** Scrolling over an element resizes it. */
+	@Override
+	public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
+		for (int i = 0; i < ExileHud.ELEMENTS.size(); i++) {
+			if (inside(boxes[i], x, y) && scrollY != 0) {
+				selected = ExileHud.ELEMENTS.get(i);
+				resize(selected, scrollY > 0 ? 1 : -1);
+				return true;
+			}
+		}
+		return true;
+	}
+
+	private static boolean inside(int[] b, double x, double y) {
+		return b[2] > 0 && x >= b[0] && y >= b[1] && x < b[0] + b[2] && y < b[1] + b[3];
+	}
+
+	/** One step bigger (+1) or smaller (-1). */
+	private static void resize(HudElement e, int direction) {
+		var slot = e.slot();
+		int nearest = 0;
+		for (int i = 1; i < SIZES.length; i++) {
+			if (Math.abs(SIZES[i] - slot.scale) < Math.abs(SIZES[nearest] - slot.scale)) nearest = i;
+		}
+		slot.scale = SIZES[Math.clamp(nearest + direction, 0, SIZES.length - 1)];
 	}
 
 	@Override
@@ -98,20 +134,54 @@ public final class HudEditorScreen extends Screen {
 			HudElement e = ExileHud.ELEMENTS.get(i);
 			int x = boxes[i][0], y = boxes[i][1], w = boxes[i][2], h = boxes[i][3];
 			if (w == 0) continue;
-			if (backdrop) d.backdrop(x, y, w, h);
-			int pad = backdrop ? ExileHud.PAD : 0;
-			e.draw(d, x + pad, y + pad, true);
-			boolean active = e == dragging || (dragging == null && ui.interactive(x, y, w, h));
+			ExileHud.drawAt(d, e, boxes[i], backdrop, true);
+			boolean active = e == selected || e == dragging || (dragging == null && ui.interactive(x, y, w, h));
 			outline(g, x - 1, y - 1, w + 2, h + 2, active ? Theme.ACCENT : Theme.alpha(Theme.TEXT, 0.25f));
 		}
-
-		// Toolbar: hint and Done, centred near the bottom.
-		int tw = 300, th = 30;
-		int tx = (width - tw) / 2, ty = height - th - 16;
-		ui.panel(tx, ty, tw, th, Theme.BG, Theme.BORDER_STRONG);
-		ui.text("Drag elements to move them", tx + 12, ty + th / 2, Theme.TEXT_DIM);
-		if (ui.button(tx + tw - 72, ty + 6, 64, 18, "Done", Kind.PRIMARY, true)) onClose();
+		toolbar(selected != null && selected.enabled() ? selected : null);
 		ui.end();
+	}
+
+	/**
+	 * Centred near the bottom. With nothing selected: a hint and Done. With an
+	 * element selected: its name, size (- 100% +), what it shows, and Done.
+	 */
+	private void toolbar(HudElement e) {
+		int th = 30, gap = 8;
+		String[] modes = e == null ? null : e.modes().stream().map(m -> m.label).toArray(String[]::new);
+		int content;
+		if (e == null) {
+			content = ui.width("Click an element to resize it, or drag it to move");
+		} else {
+			content = ui.width(e.name) + gap * 2 + 18 + 40 + 18;
+			if (modes.length > 0) content += gap * 2 + ui.segmentedWidth(modes);
+		}
+		int tw = 12 + content + gap * 2 + 64 + 12;
+		int tx = (width - tw) / 2, ty = height - th - 16;
+		toolbar[0] = tx;
+		toolbar[1] = ty;
+		toolbar[2] = tw;
+		toolbar[3] = th;
+		ui.panel(tx, ty, tw, th, Theme.BG, Theme.BORDER_STRONG);
+		int x = tx + 12, cy = ty + th / 2;
+		if (e == null) {
+			ui.text("Click an element to resize it, or drag it to move", x, cy, Theme.TEXT_DIM);
+		} else {
+			x += ui.bold(e.name, x, cy, Theme.TEXT) + gap * 2;
+			if (ui.button(x, ty + 6, 18, 18, "-", Kind.NORMAL, e.scale() > SIZES[0])) resize(e, -1);
+			x += 18;
+			ui.textCentered(Math.round(e.scale() * 100) + "%", x + 20, cy, Theme.TEXT);
+			x += 40;
+			if (ui.button(x, ty + 6, 18, 18, "+", Kind.NORMAL, e.scale() < SIZES[SIZES.length - 1])) resize(e, 1);
+			x += 18;
+			if (modes.length > 0) {
+				x += gap * 2;
+				int active = e.modes().indexOf(e.mode());
+				int chosen = ui.segmented(x, ty + 6, 18, modes, active);
+				if (chosen != active) e.setMode(e.modes().get(chosen));
+			}
+		}
+		if (ui.button(tx + tw - 76, ty + 6, 64, 18, "Done", Kind.PRIMARY, true)) onClose();
 	}
 
 	private void move(HudElement e, int x, int y) {

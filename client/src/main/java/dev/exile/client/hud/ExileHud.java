@@ -11,6 +11,7 @@ import dev.exile.client.hud.elements.FrameBudgetElement;
 import dev.exile.client.hud.elements.KeystrokesElement;
 import dev.exile.client.hud.elements.SaturationElement;
 import dev.exile.client.mixin.ToastManagerAccessor;
+import dev.exile.client.ui.HudEditorScreen;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -86,17 +87,17 @@ public final class ExileHud {
 	private static void draw(GuiGraphicsExtractor g) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null || mc.gui.hud.isHidden()) return;
+		// The layout editor draws its own preview of every element.
+		if (mc.gui.screen() instanceof HudEditorScreen) return;
 		DRAW.g = g;
 		boolean backdrop = ExileConfig.get().hudBackground;
 		layout(mc, g.guiWidth(), g.guiHeight(), backdrop, false, null, BOXES);
-		int pad = backdrop ? PAD : 0;
 		for (int i = 0; i < ELEMENTS.size(); i++) {
 			int[] b = BOXES[i];
 			if (b[2] == 0) continue;
 			HudElement e = ELEMENTS.get(i);
 			try {
-				if (backdrop) DRAW.backdrop(b[0], b[1], b[2], b[3]);
-				e.draw(DRAW, b[0] + pad, b[1] + pad, false);
+				drawAt(DRAW, e, b, backdrop, false);
 			} catch (RuntimeException ex) {
 				fail(e, ex);
 			}
@@ -173,8 +174,9 @@ public final class ExileHud {
 	/** Screen box (x, y, w, h) of an element from its stored fractional position. */
 	public static int[] place(HudElement e, int screenW, int screenH, boolean backdrop, int[] out) {
 		int pad = backdrop ? PAD : 0;
-		int w = e.width() + pad * 2;
-		int h = e.height() + pad * 2;
+		float scale = e.scale();
+		int w = Math.round((e.width() + pad * 2) * scale);
+		int h = Math.round((e.height() + pad * 2) * scale);
 		var slot = e.slot();
 		int x = MARGIN + Math.round(Math.clamp(slot.x, 0f, 1f) * Math.max(0, screenW - w - MARGIN * 2));
 		int y = MARGIN + Math.round(Math.clamp(slot.y, 0f, 1f) * Math.max(0, screenH - h - MARGIN * 2));
@@ -183,6 +185,25 @@ public final class ExileHud {
 		out[2] = w;
 		out[3] = h;
 		return out;
+	}
+
+	/**
+	 * Draws an element into its box (from {@link #layout}), backdrop
+	 * included, at the element's own size.
+	 */
+	public static void drawAt(HudDraw d, HudElement e, int[] box, boolean backdrop, boolean preview) {
+		int pad = backdrop ? PAD : 0;
+		float scale = e.scale();
+		var pose = d.g.pose();
+		pose.pushMatrix();
+		pose.translate(box[0], box[1]);
+		pose.scale(scale, scale);
+		try {
+			if (backdrop) d.backdrop(0, 0, e.width() + pad * 2, e.height() + pad * 2);
+			e.draw(d, pad, pad, preview);
+		} finally {
+			pose.popMatrix();
+		}
 	}
 
 	/** Drawing helper for the layout editor. */

@@ -15,6 +15,7 @@ import net.minecraft.world.effect.MobEffectInstance;
 /** Active potion effects: icon, name with level, and time left. */
 public final class EffectsElement extends HudElement {
 	private static final int ROW = 12;
+	private static final Identifier PREVIEW_SPRITE = Identifier.withDefaultNamespace("mob_effect/speed");
 	private final List<Row> rows = new ArrayList<>();
 	private int widest;
 	private int ticks;
@@ -48,8 +49,17 @@ public final class EffectsElement extends HudElement {
 	}
 
 	@Override
+	public List<Mode> modes() {
+		return List.of(Mode.FULL, Mode.ICON, Mode.TEXT);
+	}
+
+	@Override
 	public int width() {
-		return rows.isEmpty() ? 90 : 12 + widest;
+		return switch (mode()) {
+			case ICON -> 9;
+			case TEXT -> rows.isEmpty() ? 78 : widest;
+			case FULL -> rows.isEmpty() ? 90 : 12 + widest;
+		};
 	}
 
 	@Override
@@ -59,16 +69,23 @@ public final class EffectsElement extends HudElement {
 
 	@Override
 	public void draw(HudDraw d, int x, int y, boolean preview) {
+		Mode mode = mode();
+		boolean icon = mode != Mode.TEXT;
+		boolean text = mode != Mode.ICON;
+		int textX = icon ? x + 12 : x;
 		if (rows.isEmpty() && preview) {
-			d.text(Labels.line().append(Theme.text("Speed II  ")).append(Labels.dim("1:30")), x + 12, y, Theme.TEXT);
+			if (icon) d.g.blitSprite(RenderPipelines.GUI_TEXTURED, PREVIEW_SPRITE, x, y - 1, 9, 9);
+			if (text) d.text(Labels.line().append(Theme.text("Speed II  ")).append(Labels.dim("1:30")), textX, y, Theme.TEXT);
 			return;
 		}
 		for (int i = 0; i < rows.size(); i++) {
 			Row r = rows.get(i);
 			int ry = y + i * ROW;
-			d.g.blitSprite(RenderPipelines.GUI_TEXTURED, r.sprite, x, ry - 1, 9, 9);
-			d.text(r.name, x + 12, ry, r.ending ? Theme.WARN : Theme.TEXT);
-			d.text(r.time, x + 12 + d.width(r.name) + 6, ry, Theme.TEXT);
+			if (icon) d.g.blitSprite(RenderPipelines.GUI_TEXTURED, r.sprite, x, ry - 1, 9, 9);
+			if (text) {
+				d.text(r.name, textX, ry, r.ending ? Theme.WARN : Theme.TEXT);
+				d.text(r.time, textX + d.width(r.name) + 6, ry, Theme.TEXT);
+			}
 		}
 	}
 }

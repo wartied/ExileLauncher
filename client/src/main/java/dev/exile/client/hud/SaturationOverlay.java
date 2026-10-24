@@ -51,7 +51,7 @@ public final class SaturationOverlay {
 		}
 	}
 
-	private static void outline(GuiGraphicsExtractor g, int x, int y, int color) {
+	public static void outline(GuiGraphicsExtractor g, int x, int y, int color) {
 		for (int row = 0; row < OUTLINE.length; row++) {
 			int bits = OUTLINE[row];
 			// One rectangle per horizontal run of pixels.

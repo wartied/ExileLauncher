@@ -37,3 +37,6 @@ replay_pid*.log
 
 # Python caches from client/tools
 __pycache__/
+
+# Release script
+release.ps1

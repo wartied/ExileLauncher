@@ -219,6 +219,33 @@ public final class Ui {
 		return enabled && click(x, y, w, h);
 	}
 
+	/** Width {@link #segmented} will take for these labels. */
+	public int segmentedWidth(String[] labels) {
+		int w = 4;
+		for (String l : labels) w += width(l) + 16;
+		return w;
+	}
+
+	/**
+	 * One choice out of a few, as a row of joined segments (like the
+	 * launcher's). Returns the index chosen this frame, or {@code active}.
+	 */
+	public int segmented(int x, int y, int h, String[] labels, int active) {
+		panel(x, y, segmentedWidth(labels), h, Theme.SURFACE, Theme.BORDER);
+		int chosen = active;
+		int sx = x + 2;
+		for (int i = 0; i < labels.length; i++) {
+			int sw = width(labels[i]) + 16;
+			boolean hovered = interactive(sx, y + 2, sw, h - 4);
+			if (i == active) rect(sx, y + 2, sw, h - 4, Theme.SURFACE_ACTIVE);
+			else if (hovered) rect(sx, y + 2, sw, h - 4, Theme.SURFACE_HOVER);
+			textCentered(labels[i], sx + sw / 2, y + h / 2, i == active ? Theme.TEXT : Theme.TEXT_DIM);
+			if (i != active && click(sx, y + 2, sw, h - 4)) chosen = i;
+			sx += sw;
+		}
+		return chosen;
+	}
+
 	/** On/off switch (22x12). Returns the new state. */
 	public boolean toggle(int x, int y, boolean on, boolean enabled) {
 		int w = 22, h = 12;

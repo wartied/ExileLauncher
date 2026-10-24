@@ -1,6 +1,7 @@
 package dev.exile.client.hud;
 
 import dev.exile.client.config.ExileConfig;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 
 /**
@@ -8,6 +9,19 @@ import net.minecraft.client.Minecraft;
  * {@link #tick}, so drawing each frame only paints prepared text.
  */
 public abstract class HudElement {
+	/** What an element shows, for elements that offer a choice. */
+	public enum Mode {
+		FULL("Full"),
+		ICON("Icon"),
+		TEXT("Text");
+
+		public final String label;
+
+		Mode(String label) {
+			this.label = label;
+		}
+	}
+
 	public final String id;
 	public final String name;
 	public final String description;
@@ -29,6 +43,29 @@ public abstract class HudElement {
 
 	public boolean enabled() {
 		return slot().enabled;
+	}
+
+	/** The modes this element offers; empty when there's only one way to show it. */
+	public List<Mode> modes() {
+		return List.of();
+	}
+
+	/** The chosen mode, or {@link Mode#FULL} when there's no choice. */
+	public Mode mode() {
+		if (modes().isEmpty()) return Mode.FULL;
+		for (Mode m : modes()) {
+			if (m.name().equalsIgnoreCase(slot().mode)) return m;
+		}
+		return Mode.FULL;
+	}
+
+	public void setMode(Mode mode) {
+		slot().mode = mode.name().toLowerCase();
+	}
+
+	/** Size relative to normal, set in the layout editor. */
+	public float scale() {
+		return slot().scale;
 	}
 
 	/** Called every client tick while enabled; refresh cached values here. */

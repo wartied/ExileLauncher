@@ -6,14 +6,20 @@
     "AvatarRendererMixin",
     "CameraMixin",
     "EntityMixin",
+    "FirstPersonHandsMixin",
     "FontProviderMixin",
     "FramerateLimitTrackerMixin",
     "GameRendererMixin",
+    "GuiGraphicsMixin",
     "HumanoidArmorLayerMixin",
+    "LavaFogMixin",
+    "LightmapMixin",
     "MinecraftMixin",
     "MouseHandlerMixin",
     "PauseScreenMixin",
-    "ToastManagerAccessor"
+    "ScreenEffectRendererMixin",
+    "ToastManagerAccessor",
+    "WaterFogMixin"
   ],
   "injectors": {
     "defaultRequire": 1

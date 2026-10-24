@@ -29,7 +29,7 @@ import net.minecraft.network.chat.Component;
 public final class ExileMenuScreen extends Screen {
 	public enum Tab {
 		HUD("HUD", "Choose what is on screen and where."),
-		FEATURES("Features", "Camera, movement and armour options. All client-side."),
+		FEATURES("Features", "Camera, visibility, movement and interface. All client-side."),
 		PERFORMANCE("Performance", "Every optimisation here was measured before it shipped."),
 		MODS("Mods", ""),
 		BENCH("Bench", "A repeatable benchmark: one warm-up lap, one measured lap.");
@@ -257,6 +257,21 @@ public final class ExileMenuScreen extends Screen {
 		}
 
 		y += 6;
+		ui.section("Visibility", x + 8, y + 4);
+		y += 12;
+		f.fullbright = ui.toggleRow(x, y, w, "Fullbright", "See everything as if in full light", f.fullbright, true);
+		y += 30;
+		y = keyRow(x, y, w, "Fullbright key", Keybinds.fullbright);
+		f.clearWater = ui.toggleRow(x, y, w, "Clear water", "See as far underwater as on land", f.clearWater, true);
+		y += 30;
+		f.clearLava = ui.toggleRow(x, y, w, "Clear lava", "See through lava when you're in it", f.clearLava, true);
+		y += 30;
+		f.lowFire = ui.toggleRow(x, y, w, "Low fire", "Flames on screen sit lower when you're burning", f.lowFire, true);
+		y += 30;
+		f.lowShield = ui.toggleRow(x, y, w, "Low shield", "Your shield sits lower, so it blocks less of the view", f.lowShield, true);
+		y += 30;
+
+		y += 6;
 		ui.section("Movement", x + 8, y + 4);
 		y += 12;
 		boolean sprint = ui.toggleRow(x, y, w, "Toggle sprint", "Press sprint once to keep sprinting", o.toggleSprint().get(), true);
@@ -279,6 +294,13 @@ public final class ExileMenuScreen extends Screen {
 		y += 6;
 		ui.section("Interface", x + 8, y + 4);
 		y += 12;
+		ui.text("Menu theme", x + 8, y + 9, Theme.TEXT);
+		ui.text(ui.fit("Darker vanilla menus", w - 200), x + 8, y + 20, Theme.TEXT_FAINT);
+		String[] themes = {"Vanilla", "Dark", "Exile"};
+		int theme = MenuTheme.mode().ordinal();
+		int picked = ui.segmented(x + w - 8 - ui.segmentedWidth(themes), y + 5, 18, themes, theme);
+		if (picked != theme) MenuTheme.set(MenuTheme.Mode.values()[picked]);
+		y += 32;
 		f.saturationOverlay = ui.toggleRow(
 			x, y, w, "Saturation on hunger bar", "Gold outlines show how much saturation is left", f.saturationOverlay, true
 		);
