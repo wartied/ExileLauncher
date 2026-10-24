@@ -51,11 +51,12 @@ jobs:
       - name: Collect files
         run: |
           mkdir dist
-          cp artifacts/launcher-windows-x86_64/exile.exe dist/exile-windows-x86_64.exe
-          cp artifacts/launcher-linux-x86_64/exile dist/exile-linux-x86_64
-          chmod +x dist/exile-linux-x86_64
-          # For people: a tarball keeps the executable bit. The launcher updates from the bare binary.
-          tar -C dist -czf dist/exile-linux-x86_64.tar.gz --transform 's/^exile-linux-x86_64$/exile/' exile-linux-x86_64
+          # Plain names: these are what people's browsers save.
+          cp artifacts/launcher-windows-x86_64/exile.exe dist/exile.exe
+          cp artifacts/launcher-linux-x86_64/exile dist/exile
+          chmod +x dist/exile
+          # For people on Linux: a tarball keeps the executable bit. The launcher updates from the bare binary.
+          tar -C dist -czf dist/exile-linux.tar.gz exile
           cp artifacts/client-jar/exile-client-*.jar dist/exile-client.jar
           ls -l dist
 
@@ -82,8 +83,8 @@ jobs:
             --key "$RUNNER_TEMP/signing-key.pem" \
             --base-url "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME" \
             --notes notes.txt --client "$client" --out dist/update.json \
-            windows-x86_64=dist/exile-windows-x86_64.exe \
-            linux-x86_64=dist/exile-linux-x86_64
+            windows-x86_64=dist/exile.exe \
+            linux-x86_64=dist/exile
           rm -f "$RUNNER_TEMP/signing-key.pem"
           cat dist/update.json
 

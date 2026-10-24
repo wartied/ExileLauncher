@@ -9,7 +9,7 @@ The signed text is exactly what crates/launcher/src/update.rs verifies:
 Usage:
     update_manifest.py --version 0.2.0 --key signing-key.pem --base-url URL \\
         [--notes notes.txt] [--client 0.1.0] --out update.json \\
-        windows-x86_64=dist/exile-windows-x86_64.exe linux-x86_64=dist/exile-linux-x86_64
+        windows-x86_64=dist/exile.exe linux-x86_64=dist/exile
 
 Needs OpenSSL 3 on PATH (for `pkeyutl -rawin`).
 """
