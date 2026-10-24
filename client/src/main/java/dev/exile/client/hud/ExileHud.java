@@ -54,6 +54,9 @@ public final class ExileHud {
 
 	public static void init() {
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("exile", "hud"), (g, delta) -> draw(g));
+		HudElementRegistry.attachElementAfter(
+			VanillaHudElements.FOOD_BAR, Identifier.fromNamespaceAndPath("exile", "saturation"), (g, delta) -> SaturationOverlay.draw(g)
+		);
 		// Exile's effects list replaces the vanilla icons when both would show.
 		HudElementRegistry.replaceElement(VanillaHudElements.MOB_EFFECTS, vanilla -> (g, delta) -> {
 			if (!(EFFECTS.enabled() && ExileConfig.get().features.replaceVanillaEffects)) {

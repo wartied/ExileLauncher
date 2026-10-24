@@ -54,6 +54,25 @@ public final class ExileConfig {
 		public boolean freelook = true;
 		/** Hide vanilla's effect icons when Exile's effects list is shown. */
 		public boolean replaceVanillaEffects = true;
+		/** Gold outline on the hunger bar for the saturation left. */
+		public boolean saturationOverlay = true;
+
+		public boolean zoom = true;
+		/** Press once to zoom and again to stop, instead of holding the key. */
+		public boolean zoomToggle = false;
+		/** Magnification when zooming starts (2x..10x). */
+		public int zoomLevel = 4;
+		/** Ease in and out instead of jumping. */
+		public boolean zoomSmooth = true;
+		/** Mouse wheel changes the zoom while zoomed. */
+		public boolean zoomScroll = true;
+		/** Vanilla's cinematic camera while zoomed. */
+		public boolean zoomCinematic = false;
+
+		/** Armour drawn closer to the body (all humanoid players). */
+		public boolean slimArmour = false;
+		/** Don't draw your own armour (only on this client). */
+		public boolean invisibleArmour = false;
 	}
 
 	public static final class Performance {
@@ -103,6 +122,7 @@ public final class ExileConfig {
 		if (performance.governorBaseline == null) performance.governorBaseline = new LinkedHashMap<>();
 		performance.backgroundFps = Math.clamp(performance.backgroundFps, 5, 120);
 		performance.governorTargetFps = Math.clamp(performance.governorTargetFps, 30, 360);
+		features.zoomLevel = Math.clamp(features.zoomLevel, 2, 10);
 		if (layoutVersion < 2) {
 			// Version 2 stacks the left column from the top corner (the layout
 			// keeps elements from overlapping, so they line up evenly at every

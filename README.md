@@ -39,6 +39,17 @@ If `client/build/libs` has no jar, the launcher still builds, just without the E
 The binary is `target/release/exile.exe`. Release builds don't open a console window. Java doesn't need
 to be installed: Exile downloads the exact runtime Mojang ships for each Minecraft version.
 
+### Testing without Microsoft sign-in
+
+```
+cargo run --release -p exile-launcher --features dev-offline
+```
+
+This adds an **Offline (dev)** button next to the sign-in button. It plays as `ExileDev`, singleplayer
+only (servers reject it), and the session is never saved. Everything else, including installs, mods,
+Exile Client and the memory budget, is the real launcher. The feature is off by default; never hand out
+a build made with it. Rebuild with plain `cargo build --release` first.
+
 ## Microsoft sign-in
 
 **Forks:** please register your own app rather than reusing Exile's ID. Set it in

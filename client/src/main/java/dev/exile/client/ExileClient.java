@@ -1,6 +1,7 @@
 package dev.exile.client;
 
 import dev.exile.client.bench.ExileBench;
+import dev.exile.client.feature.Armour;
 import dev.exile.client.feature.Keybinds;
 import dev.exile.client.hud.ExileHud;
 import dev.exile.client.perf.Governor;
@@ -26,6 +27,7 @@ public final class ExileClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		Optimisations.init();
 		Keybinds.init();
+		Armour.init();
 		ExileHud.init();
 		TitleScreenButton.init();
 

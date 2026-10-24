@@ -6,6 +6,12 @@ description = "Exile Launcher - a fast, native Minecraft launcher"
 license = "GPL-3.0-only"
 publish = false
 
+[features]
+# Developer builds only: an "Offline (dev)" account so launches can be tested
+# without Microsoft sign-in.  cargo run --release --features dev-offline
+# Never enable this for builds you hand out.
+dev-offline = []
+
 [[bin]]
 name = "exile"
 path = "src/main.rs"

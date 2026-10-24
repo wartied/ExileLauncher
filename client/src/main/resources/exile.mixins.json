@@ -3,11 +3,13 @@
   "package": "dev.exile.client.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "AvatarRendererMixin",
     "CameraMixin",
     "EntityMixin",
     "FontProviderMixin",
     "FramerateLimitTrackerMixin",
     "GameRendererMixin",
+    "HumanoidArmorLayerMixin",
     "MinecraftMixin",
     "MouseHandlerMixin",
     "PauseScreenMixin",

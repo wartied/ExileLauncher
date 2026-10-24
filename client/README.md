@@ -15,8 +15,14 @@ A performance-first Fabric mod for Minecraft: Java Edition 26.3. It's the in-gam
   settings. It reports average FPS, 1% and 0.1% lows, frame-time percentiles and GC activity, and
   saves JSON results to `.minecraft/exile/bench`.
 - **HUD.** FPS, coordinates, armour durability, food and saturation, potion effects, keystrokes, CPS
-  and the Frame Budget overlay, all movable in the layout editor.
-- **Features.** Free look (hold Left Alt), toggle sprint and toggle sneak.
+  and the Frame Budget overlay, all movable in the layout editor. Saturation is also shown on the hunger
+  bar itself, as gold outlines on the drumsticks it still backs.
+- **Features.** Free look (hold Left Alt), zoom (hold C; amount, toggle or hold, smooth, scroll to adjust
+  and cinematic camera are all adjustable), toggle sprint and toggle sneak. Keys can be rebound right in
+  the Exile menu.
+- **Armour.** Slim armour (armour fitted closer to the body, on every player) and invisible armour (hide
+  your own armour so your skin shows). Both only change what you see; other players see your armour as
+  normal.
 - **Mod list in the pause menu.** Exile's own minimal mod list, which opens other mods' settings
   screens through the Mod Menu API, so Mod Menu isn't needed. If Mod Menu is installed anyway, the
   real one takes over automatically.

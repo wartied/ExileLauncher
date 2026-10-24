@@ -17,6 +17,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
@@ -27,7 +29,7 @@ import net.minecraft.network.chat.Component;
 public final class ExileMenuScreen extends Screen {
 	public enum Tab {
 		HUD("HUD", "Choose what is on screen and where."),
-		FEATURES("Features", "Small conveniences that change how you play, not what you see."),
+		FEATURES("Features", "Camera, movement and armour options. All client-side."),
 		PERFORMANCE("Performance", "Every optimisation here was measured before it shipped."),
 		MODS("Mods", ""),
 		BENCH("Bench", "A repeatable benchmark: one warm-up lap, one measured lap.");
@@ -46,6 +48,8 @@ public final class ExileMenuScreen extends Screen {
 	private final Ui ui = new Ui();
 	private Tab tab;
 	private double scroll;
+	/** The key binding waiting for a key press, if any (see keyRow). */
+	private KeyMapping capturing;
 	private int contentHeight;
 	private List<ModEntries.Entry> mods;
 	private List<BenchHistory.Row> history;
@@ -81,8 +85,23 @@ public final class ExileMenuScreen extends Screen {
 
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		// While rebinding, any button but the left one becomes the key.
+		if (capturing != null && event.button() != InputConstants.MOUSE_BUTTON_LEFT) {
+			bind(InputConstants.Type.MOUSE.getOrCreate(event.button()));
+			return true;
+		}
 		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) ui.press(event.x(), event.y());
 		return true;
+	}
+
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		if (capturing != null) {
+			if (event.key() == InputConstants.KEY_ESCAPE) capturing = null;
+			else bind(InputConstants.getKey(event));
+			return true;
+		}
+		return super.keyPressed(event);
 	}
 
 	@Override
@@ -105,6 +124,7 @@ public final class ExileMenuScreen extends Screen {
 	/** Called whenever this screen goes away, including when the game quits with it open. */
 	@Override
 	public void removed() {
+		capturing = null;
 		ExileConfig.get().save();
 		minecraft.options.save();
 	}
@@ -215,21 +235,81 @@ public final class ExileMenuScreen extends Screen {
 	private int featuresTab(int x, int y, int w) {
 		var f = ExileConfig.get().features;
 		var o = minecraft.options;
-		String key = Keybinds.freelook.getTranslatedKeyMessage().getString();
-		f.freelook = ui.toggleRow(x, y, w, "Free look", "Hold " + key + " to look around without turning", f.freelook, true);
+
+		ui.section("Camera", x + 8, y + 4);
+		y += 12;
+		f.freelook = ui.toggleRow(x, y, w, "Free look", "Hold the key to look around without turning", f.freelook, true);
 		y += 30;
+		if (f.freelook) y = keyRow(x, y, w, "Free look key", Keybinds.freelook);
+		f.zoom = ui.toggleRow(x, y, w, "Zoom", "Hold the key to magnify the view", f.zoom, true);
+		y += 30;
+		if (f.zoom) {
+			y = keyRow(x, y, w, "Zoom key", Keybinds.zoom);
+			y = sliderRow(x, y, w, "Zoom amount", "zoom", f.zoomLevel, 2, 10, 1, "x", v -> f.zoomLevel = v);
+			f.zoomToggle = ui.toggleRow(x, y, w, "Toggle zoom", "Press once to zoom and again to stop, instead of holding", f.zoomToggle, true);
+			y += 30;
+			f.zoomSmooth = ui.toggleRow(x, y, w, "Smooth zoom", "Ease in and out instead of jumping", f.zoomSmooth, true);
+			y += 30;
+			f.zoomScroll = ui.toggleRow(x, y, w, "Scroll to adjust", "Mouse wheel zooms further in or out while zoomed", f.zoomScroll, true);
+			y += 30;
+			f.zoomCinematic = ui.toggleRow(x, y, w, "Cinematic camera", "Smooth, drifting camera movement while zoomed", f.zoomCinematic, true);
+			y += 30;
+		}
+
+		y += 6;
+		ui.section("Movement", x + 8, y + 4);
+		y += 12;
 		boolean sprint = ui.toggleRow(x, y, w, "Toggle sprint", "Press sprint once to keep sprinting", o.toggleSprint().get(), true);
 		if (sprint != o.toggleSprint().get()) o.toggleSprint().set(sprint);
 		y += 30;
 		boolean sneak = ui.toggleRow(x, y, w, "Toggle sneak", "Press sneak once to keep sneaking", o.toggleCrouch().get(), true);
 		if (sneak != o.toggleCrouch().get()) o.toggleCrouch().set(sneak);
 		y += 30;
+
+		y += 6;
+		ui.section("Armour", x + 8, y + 4);
+		y += 12;
+		f.slimArmour = ui.toggleRow(x, y, w, "Slim armour", "Armour sits closer to the body, on every player", f.slimArmour, true);
+		y += 30;
+		f.invisibleArmour = ui.toggleRow(
+			x, y, w, "Invisible armour", "Hide your own armour so your skin shows. Only you see this", f.invisibleArmour, true
+		);
+		y += 30;
+
+		y += 6;
+		ui.section("Interface", x + 8, y + 4);
+		y += 12;
+		f.saturationOverlay = ui.toggleRow(
+			x, y, w, "Saturation on hunger bar", "Gold outlines show how much saturation is left", f.saturationOverlay, true
+		);
+		y += 30;
 		f.replaceVanillaEffects = ui.toggleRow(
 			x, y, w, "Replace effect icons", "Hide vanilla's effect icons while Exile's list is on", f.replaceVanillaEffects, true
 		);
 		y += 30;
-		ui.text("Keys can be changed under Options, Controls, Exile.", x + 8, y + 8, Theme.TEXT_FAINT);
+		ui.text("Exile's keys are also under Options, Controls, Exile.", x + 8, y + 8, Theme.TEXT_FAINT);
 		return y + 18;
+	}
+
+	/**
+	 * A key binding with its key on a button. Click it, then press a key (or a
+	 * side or middle mouse button) to rebind; Esc or clicking again cancels.
+	 */
+	private int keyRow(int x, int y, int w, String label, KeyMapping key) {
+		boolean listening = capturing == key;
+		ui.text(label, x + 8, y + 10, Theme.TEXT_DIM);
+		String name = listening ? "Press a key" : key.getTranslatedKeyMessage().getString();
+		if (ui.button(x + w - 98, y + 1, 90, 18, ui.fit(name, 82), listening ? Kind.PRIMARY : Kind.NORMAL, true)) {
+			capturing = listening ? null : key;
+		}
+		return y + 24;
+	}
+
+	private void bind(InputConstants.Key key) {
+		capturing.setKey(key);
+		KeyMapping.resetMapping();
+		minecraft.options.save();
+		capturing = null;
 	}
 
 	private int performanceTab(int x, int y, int w) {
@@ -251,7 +331,7 @@ public final class ExileMenuScreen extends Screen {
 		if (bt != BackgroundThrottle.SWITCH.enabled()) BackgroundThrottle.SWITCH.set(bt);
 		y += 30;
 		if (bt) {
-			y = sliderRow(x, y, w, "Background FPS", "bg", p.backgroundFps, 5, 120, 5, v -> p.backgroundFps = v);
+			y = sliderRow(x, y, w, "Background FPS", "bg", p.backgroundFps, 5, 120, 5, " fps", v -> p.backgroundFps = v);
 		}
 		var fb = ExileHud.FRAME_BUDGET.slot();
 		fb.enabled = ui.toggleRow(x, y, w, "Frame Budget overlay", "Live breakdown of where each frame's time goes", fb.enabled, true);
@@ -261,7 +341,7 @@ public final class ExileMenuScreen extends Screen {
 		);
 		y += 30;
 		if (p.governor) {
-			y = sliderRow(x, y, w, "Target FPS", "target", p.governorTargetFps, 30, 240, 10, v -> p.governorTargetFps = v);
+			y = sliderRow(x, y, w, "Target FPS", "target", p.governorTargetFps, 30, 240, 10, " fps", v -> p.governorTargetFps = v);
 		}
 
 		List<Tuning.Switch> opts = Tuning.all().stream().filter(s -> s != BackgroundThrottle.SWITCH).toList();
@@ -279,9 +359,9 @@ public final class ExileMenuScreen extends Screen {
 		return y;
 	}
 
-	private int sliderRow(int x, int y, int w, String label, Object id, int value, int min, int max, int step, java.util.function.IntConsumer set) {
+	private int sliderRow(int x, int y, int w, String label, Object id, int value, int min, int max, int step, String unit, java.util.function.IntConsumer set) {
 		ui.text(label, x + 8, y + 10, Theme.TEXT_DIM);
-		ui.textRight(value + " fps", x + w - 8, y + 10, Theme.TEXT);
+		ui.textRight(value + unit, x + w - 8, y + 10, Theme.TEXT);
 		int sx = x + 110;
 		int next = ui.slider(id, sx, y + 4, w - 110 - 60, value, min, max, step);
 		if (next != value) set.accept(next);

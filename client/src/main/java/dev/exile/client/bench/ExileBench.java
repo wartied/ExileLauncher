@@ -20,6 +20,7 @@ import java.util.function.Consumer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.InactivityFpsLimit;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.GameType;
@@ -63,7 +64,7 @@ public final class ExileBench {
 	/** Travel speed: 20 blocks per second, about elytra cruising speed. */
 	private static final double TRAVEL_BLOCKS_PER_TICK = 1.0;
 
-	public enum State { IDLE, LEAVING, LOADING, SETTLING, WARMUP, MEASURE, DONE }
+	public enum State { IDLE, STARTING, LEAVING, LOADING, SETTLING, WARMUP, MEASURE, DONE }
 
 	private static State state = State.IDLE;
 	private static int stateTicks;
@@ -102,22 +103,35 @@ public final class ExileBench {
 		};
 	}
 
+	/**
+	 * Requests a run. The work starts on the next client tick: this is called
+	 * from menu clicks, which Exile's menu handles while it is drawing, and
+	 * leaving a world in the middle of a frame tears the world renderer down
+	 * under the rest of that frame (it crashed Sodium when leaving a server).
+	 */
 	public static void start(boolean quitWhenDone, Consumer<BenchResult> done) {
 		if (running()) return;
-		Minecraft mc = Minecraft.getInstance();
 		autoQuit = quitWhenDone;
 		onDone = done;
+		setState(State.STARTING);
+	}
+
+	private static void begin(Minecraft mc) {
 		saved = Saved.capture(mc);
 		applyBenchSettings(mc);
 		stateTicks = 0;
 		ExileClient.LOG.info("Exile Bench: starting ({})", Tuning.describe());
 		if (mc.level != null) {
-			// Already in a world: leave it first and open the bench world once
-			// the old one has fully closed (see tick).
-			state = State.LEAVING;
-			mc.disconnectWithProgressScreen();
+			// Already in a world: leave it the way vanilla's Disconnect button
+			// does, then open the bench world once the old one has fully
+			// closed (see tick).
+			setState(State.LEAVING);
+			boolean local = mc.isLocalServer();
+			mc.level.disconnect(ClientLevel.DEFAULT_QUIT_MESSAGE);
+			if (local) mc.disconnectWithSavingScreen();
+			else mc.disconnectWithProgressScreen();
 		} else {
-			state = State.LOADING;
+			setState(State.LOADING);
 			openBenchWorld(mc);
 		}
 	}
@@ -149,6 +163,7 @@ public final class ExileBench {
 		LocalPlayer player = mc.player;
 
 		switch (state) {
+			case STARTING -> begin(mc);
 			case LEAVING -> {
 				if (mc.level == null && mc.getSingleplayerServer() == null) {
 					setState(State.LOADING);
