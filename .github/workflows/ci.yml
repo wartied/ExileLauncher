@@ -1,0 +1,12 @@
+# Every push to main and every pull request: does everything still build and
+# pass its tests on both platforms?
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml

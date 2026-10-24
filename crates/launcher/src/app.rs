@@ -5,6 +5,7 @@
 //! The UI thread only ever reads atomics or owned state, so it never stalls.
 
 mod mods_tab;
+mod updates;
 
 use std::collections::{HashMap, HashSet};
 use std::process::Child;
@@ -120,6 +121,8 @@ enum Event {
     ModSearch { seq: u64, result: Result<Vec<SearchHit>, String> },
     ModInstalled { instance_id: String, project_id: String, result: Result<InstallOutcome, String> },
     LoaderReady { instance_id: String, result: Result<LoaderSpec, String> },
+    UpdateChecked(Result<Option<crate::update::Release>, String>),
+    UpdateDownloaded(Result<(String, std::path::PathBuf), String>),
 }
 
 pub struct ExileApp {
@@ -155,6 +158,8 @@ pub struct ExileApp {
     gpu: Option<String>,
     /// Instances waiting for Fabric before Exile Client's companion mods install.
     client_setup: HashSet<String>,
+    update: updates::UpdateState,
+    last_update_check: Option<Instant>,
 }
 
 impl ExileApp {
@@ -195,6 +200,8 @@ impl ExileApp {
             search_seq: 0,
             gpu: None,
             client_setup: HashSet::new(),
+            update: updates::UpdateState::Idle,
+            last_update_check: None,
         };
         if let Some(id) = app.selected.clone() {
             app.refresh_mods(&id);
@@ -499,6 +506,8 @@ impl ExileApp {
     fn handle_events(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
+                Event::UpdateChecked(result) => self.on_update_checked(result),
+                Event::UpdateDownloaded(result) => self.on_update_downloaded(result),
                 Event::Versions(Ok(list)) => self.versions = Versions::Ready(list),
                 Event::Versions(Err(e)) => self.versions = Versions::Failed(e),
                 Event::SignIn(result) => match result {
@@ -595,8 +604,9 @@ impl ExileApp {
             self.last_probe = Instant::now();
             self.sys = memory::probe();
         }
+        self.update_tick();
         // Repaint only as often as something on screen can change.
-        let next = if !self.tasks.is_empty() || !self.mod_jobs.is_empty() {
+        let next = if !self.tasks.is_empty() || !self.mod_jobs.is_empty() || self.update_animating() {
             Duration::from_millis(100)
         } else if !self.games.running.is_empty() || matches!(self.account, Account::SigningIn { .. }) {
             Duration::from_secs(1)
@@ -657,6 +667,10 @@ impl eframe::App for ExileApp {
         painter.vline(screen.left() + 260.0, (screen.top() + 56.0)..=(screen.bottom() - 30.0), line);
 
         self.dialogs(ui.ctx());
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.install_update_on_exit();
     }
 }
 
@@ -730,8 +744,10 @@ impl ExileApp {
                     .color(TEXT_DIM),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.update_status(ui);
                 let n = self.games.running.len();
                 if n > 0 {
+                    ui.add_space(14.0);
                     ui.label(
                         RichText::new(format!(
                             "{n} running · {} reserved for games",

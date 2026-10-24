@@ -131,6 +131,21 @@ pub struct Settings {
     /// build time.
     #[serde(default)]
     pub curseforge_api_key: Option<String>,
+    /// Launcher updates (see `update`).
+    #[serde(default)]
+    pub updates: UpdateMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateMode {
+    /// Download in the background, install when the launcher closes.
+    Auto,
+    /// Show that an update is available; the user decides.
+    #[default]
+    Ask,
+    /// Never check.
+    Off,
 }
 
 impl Settings {

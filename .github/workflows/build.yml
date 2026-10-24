@@ -1,0 +1,60 @@
+# Builds Exile Client and the launcher (with the client bundled) for Windows
+# and Linux, and runs the launcher's tests. Used by ci.yml and release.yml.
+name: Build
+
+on:
+  workflow_call:
+
+jobs:
+  client:
+    name: Exile Client
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        working-directory: client
+        run: bash ./gradlew --no-daemon build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-jar
+          path: client/build/libs/exile-client-*.jar
+          if-no-files-found: error
+
+  launcher:
+    name: Launcher (${{ matrix.platform }})
+    needs: client
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+            binary: exile.exe
+          # The oldest supported Ubuntu, so the binary runs on older glibc too.
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            binary: exile
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bundle the client
+        uses: actions/download-artifact@v4
+        with:
+          name: client-jar
+          path: client/build/libs
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release --locked
+      - name: Build
+        run: cargo build --release --locked -p exile-launcher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-${{ matrix.platform }}
+          path: target/release/${{ matrix.binary }}
+          if-no-files-found: error

@@ -16,6 +16,7 @@ mod paths;
 mod secure_store;
 mod skin;
 mod theme;
+mod update;
 mod versions;
 mod widgets;
 
@@ -44,6 +45,7 @@ fn icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    update::clean_up();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Exile")

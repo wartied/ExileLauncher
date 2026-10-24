@@ -7,13 +7,15 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
+#[cfg(windows)]
 const ENTROPY: &[u8] = b"exile-launcher-session-v1";
 
 #[cfg(windows)]
 mod imp {
     use super::*;
+    use anyhow::bail;
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,

@@ -78,6 +78,24 @@ set EXILE_SMOKE_MODS=sodium,modmenu
 cargo test -- --ignored --test-threads=1 smoke
 ```
 
+## Releasing and updates
+
+1. Bump `version` in `crates/launcher/Cargo.toml` and commit.
+2. `git tag -a v0.2.0 -m "What changed, in a sentence or two"`
+3. `git push origin v0.2.0`
+
+The Release workflow checks the tag matches the version, builds the client and the launcher for Windows
+and Linux, signs them, and publishes a GitHub Release with `update.json`. The tag message becomes the
+release notes shown in the launcher. [exiles.dev](https://exiles.dev) always points at the newest
+release, so nothing else needs updating.
+
+Installed launchers check `exiles.dev/update.json` (by default they ask before updating; users can
+choose Automatic or Off from the version label in the status bar). Every update carries an Ed25519
+signature from Exile's release key, which only exists as the `EXILE_SIGNING_KEY` repository secret and an
+offline backup. The launcher has the public key built in (`crates/launcher/src/update.rs`) and refuses
+anything it didn't sign, so neither the website nor the download host can push an update on their own.
+`EXILE_UPDATE_URL` points a launcher at another manifest for testing; the signature is still required.
+
 ## License
 
 Copyright (C) 2026 the Exile contributors.
