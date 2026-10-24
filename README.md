@@ -1,4 +1,4 @@
-# Exile Launcher
+# Exile
 
 A performance-first Minecraft: Java Edition launcher and client.
 
@@ -12,18 +12,11 @@ Exile has two parts that work together but live separately:
 ## Launcher
 
 - **Native and light.** No web view and no Electron. The UI is drawn with egui, uses no CPU while idle, and ships as one ~9 MB executable.
-- **Every version from 1.7.2 on**, each in its own instance with its own worlds, settings and mods. Several instances can run at once.
 - **Safe memory handling.** Memory limits depend on the version and on how many mods it has, Windows always keeps a reserve, and a game won't start if everything running wouldn't fit in your RAM.
 - **Mods.** One-click Fabric setup, then search and install mods from Modrinth (and CurseForge, with an API key). Dependencies install automatically, and conflicts, missing dependencies and hardware limits are flagged.
 - **Microsoft sign-in.** Players sign in through Microsoft's own login page, and Exile checks the account owns Minecraft before the game can start.
 - **Tuned Java settings.** On Java 25 it uses compact object headers, and on machines with spare cores the ZGC collector. Measured with Exile Bench, that cuts the worst stutters (0.1% low FPS) by about 2.5× compared with Mojang's default G1 settings.
 - **Startup cache.** On Java 25 (Minecraft 26.x) the first launch of an instance records which classes the game loads, and Exile builds a Java AOT cache from that in the background. Later launches reach the menu about 8% sooner (9.1 s to 8.4 s with Fabric, Sodium, Lithium and Exile Client). Costs: closing the game takes about a minute longer once per setup, and the cache uses about 140 MB of disk per instance.
-
-```
-crates/
-  launcher/   Exile Launcher (Rust)
-client/       Exile Client (Java, Gradle)
-```
 
 ## Build and run
 
@@ -78,23 +71,6 @@ set EXILE_SMOKE_MODS=sodium,modmenu
 cargo test -- --ignored --test-threads=1 smoke
 ```
 
-## Releasing and updates
-
-1. Bump `version` in `crates/launcher/Cargo.toml` and commit.
-2. `git tag -a v0.2.0 -m "What changed, in a sentence or two"`
-3. `git push origin v0.2.0`
-
-The Release workflow checks the tag matches the version, builds the client and the launcher for Windows
-and Linux, signs them, and publishes a GitHub Release with `update.json`. The tag message becomes the
-release notes shown in the launcher. [exiles.dev](https://exiles.dev) always points at the newest
-release, so nothing else needs updating.
-
-Installed launchers check `exiles.dev/update.json` (by default they ask before updating; users can
-choose Automatic or Off from the version label in the status bar). Every update carries an Ed25519
-signature from Exile's release key, which only exists as the `EXILE_SIGNING_KEY` repository secret and an
-offline backup. The launcher has the public key built in (`crates/launcher/src/update.rs`) and refuses
-anything it didn't sign, so neither the website nor the download host can push an update on their own.
-`EXILE_UPDATE_URL` points a launcher at another manifest for testing; the signature is still required.
 
 ## License
 
@@ -107,4 +83,4 @@ See [LICENSE](LICENSE).
 The bundled [Iosevka Aile](https://github.com/be5invis/Iosevka) font (subset) is licensed under the
 SIL Open Font License 1.1. See `crates/launcher/assets/fonts/LICENSE-Iosevka.md`.
 
-Exile is not an official Minecraft product. It is not approved by or associated with Mojang or Microsoft.
+Exile is not an official Minecraft product. It is not associated with Mojang or Microsoft.
