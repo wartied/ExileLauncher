@@ -309,11 +309,8 @@ impl ExileApp {
         if let Account::SigningIn { cancel } = &self.account {
             cancel.store(true, Ordering::Relaxed);
         }
-        // An offline test session was never saved; leave a real saved account alone.
-        if !self.session().is_some_and(Session::is_offline) {
-            auth::forget();
-            skin::clear_cache();
-        }
+        auth::forget();
+        skin::clear_cache();
         self.account = Account::SignedOut;
         // Dropping the handle frees the GPU texture.
         self.face = None;
@@ -322,7 +319,7 @@ impl ExileApp {
     fn refresh_session(&mut self) {
         let Some(client_id) = self.settings.client_id() else { return };
         let Account::SignedIn { session, refreshing } = &mut self.account else { return };
-        if *refreshing || session.is_offline() {
+        if *refreshing {
             return;
         }
         *refreshing = true;
@@ -672,11 +669,6 @@ impl ExileApp {
                     if widgets::button(ui, "Sign in with Microsoft").clicked() {
                         self.sign_in();
                     }
-                    #[cfg(feature = "dev-offline")]
-                    if widgets::button(ui, "Offline (dev)").clicked() {
-                        self.face = None;
-                        self.account = Account::SignedIn { session: Session::offline("ExileDev"), refreshing: false };
-                    }
                 }
                 Account::SigningIn { cancel } => {
                     let cancel = cancel.clone();
@@ -689,7 +681,6 @@ impl ExileApp {
                 }
                 Account::SignedIn { session, .. } => {
                     let name = session.name.clone();
-                    let offline = session.is_offline();
                     let response = self.account_chip(ui, &name);
                     egui::Popup::menu(&response)
                         .align(egui::RectAlign::BOTTOM_END)
@@ -702,8 +693,7 @@ impl ExileApp {
                                 widgets::avatar(ui, self.face.as_ref(), &name, 32.0);
                                 ui.vertical(|ui| {
                                     ui.label(RichText::new(&name).family(theme::semibold()));
-                                    let kind = if offline { "Offline test account" } else { "Minecraft: Java Edition" };
-                                    ui.label(RichText::new(kind).size(12.0).color(TEXT_DIM));
+                                    ui.label(RichText::new("Minecraft: Java Edition").size(12.0).color(TEXT_DIM));
                                 });
                             });
                             ui.add_space(4.0);

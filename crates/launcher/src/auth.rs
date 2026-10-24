@@ -55,32 +55,6 @@ impl Session {
     pub fn needs_refresh(&self) -> bool {
         now() + 600 >= self.expires_at
     }
-
-    /// A local session for testing launches without Microsoft (only in
-    /// builds with the `dev-offline` feature). It has no real token, so the
-    /// game runs singleplayer only; it is never saved or refreshed.
-    #[cfg(feature = "dev-offline")]
-    pub fn offline(name: &str) -> Session {
-        // Stable per name, so worlds keep the same player data between runs.
-        let hash = Sha256::digest(format!("OfflinePlayer:{name}").as_bytes());
-        let mut id = [0u8; 16];
-        id.copy_from_slice(&hash[..16]);
-        id[6] = (id[6] & 0x0f) | 0x30;
-        id[8] = (id[8] & 0x3f) | 0x80;
-        Session {
-            refresh_token: String::new(),
-            access_token: "0".into(),
-            expires_at: u64::MAX,
-            uuid: net::hex(&id),
-            name: name.into(),
-            skin_url: None,
-        }
-    }
-
-    /// True for a [`Session::offline`] test session.
-    pub fn is_offline(&self) -> bool {
-        self.refresh_token.is_empty()
-    }
 }
 
 fn now() -> u64 {
