@@ -117,7 +117,7 @@ pub fn load_all() -> Vec<Instance> {
 /// design: it identifies the launcher to Microsoft and grants nothing.
 const EXILE_CLIENT_ID: &str = "5365d536-555e-4574-aba0-7e5f18c07e2e";
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     /// Azure application (client) ID used for Microsoft sign-in.
     #[serde(default)]
@@ -134,6 +134,28 @@ pub struct Settings {
     /// Launcher updates (see `update`).
     #[serde(default)]
     pub updates: UpdateMode,
+    /// Neutral greys instead of Exile's blue-tinted ones.
+    #[serde(default)]
+    pub dark_theme: bool,
+    /// Size of the whole interface, 0.8..1.5.
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
+    /// Heap for new instances; `None` uses each version's recommendation.
+    #[serde(default)]
+    pub default_memory_mb: Option<u64>,
+    /// Lowers the most any instance may use; `None` leaves the safe maximum.
+    #[serde(default)]
+    pub max_memory_mb: Option<u64>,
+    /// How many games may run at once; `None` is only limited by memory.
+    #[serde(default)]
+    pub max_running: Option<u32>,
+    /// Minimise the launcher while a game it started is running.
+    #[serde(default)]
+    pub minimize_on_launch: bool,
+}
+
+fn default_ui_scale() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,12 +170,35 @@ pub enum UpdateMode {
     Off,
 }
 
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            microsoft_client_id: None,
+            show_snapshots: false,
+            selected: None,
+            curseforge_api_key: None,
+            updates: UpdateMode::default(),
+            dark_theme: false,
+            ui_scale: default_ui_scale(),
+            default_memory_mb: None,
+            max_memory_mb: None,
+            max_running: None,
+            minimize_on_launch: false,
+        }
+    }
+}
+
 impl Settings {
     pub fn load() -> Settings {
-        fs::read_to_string(paths::settings_file())
-            .ok()
-            .and_then(|t| toml::from_str(&t).ok())
-            .unwrap_or_default()
+        let mut s: Settings =
+            fs::read_to_string(paths::settings_file()).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default();
+        // The file can be hand-edited: keep values usable.
+        if !s.ui_scale.is_finite() {
+            s.ui_scale = 1.0;
+        }
+        s.ui_scale = s.ui_scale.clamp(0.8, 1.5);
+        s.max_running = s.max_running.filter(|n| *n > 0);
+        s
     }
 
     pub fn save(&self) {

@@ -123,6 +123,21 @@ pub fn limits(total_mb: u64, needs: GameNeeds) -> Limits {
     }
 }
 
+/// Applies the user's own ceiling (Settings, "Maximum per instance"). It can
+/// only lower the safe maximum, never raise it, and never below what the
+/// version needs to start at all.
+pub fn capped(limits: Limits, cap_mb: Option<u64>) -> Limits {
+    let Some(cap) = cap_mb else { return limits };
+    let max_mb = round_down(cap).clamp(limits.min_mb, limits.max_mb);
+    Limits { max_mb, recommended_mb: limits.recommended_mb.min(max_mb), ..limits }
+}
+
+/// The largest heap this machine can give any one game (for settings sliders).
+pub fn machine_max_mb(total_mb: u64) -> u64 {
+    let budget = total_mb.saturating_sub(os_reserve_mb(total_mb));
+    round_down(budget.saturating_sub(384) * 8 / 9)
+}
+
 /// Snaps a stored allocation onto this machine's limits. Instances can be
 /// copied between machines, and settings files can be hand-edited, so the
 /// stored value is never trusted as-is.
@@ -198,6 +213,21 @@ pub fn fmt_mb(mb: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_cap_only_lowers() {
+        let base = limits(32 * 1024, needs_for("2026-01-01"));
+        // No cap: unchanged.
+        assert_eq!(capped(base, None), base);
+        // A lower cap lowers the maximum and the recommendation with it.
+        let c = capped(base, Some(3072));
+        assert_eq!(c.max_mb, 3072);
+        assert!(c.recommended_mb <= 3072);
+        // A cap above the safe maximum changes nothing.
+        assert_eq!(capped(base, Some(1 << 20)).max_mb, base.max_mb);
+        // A cap below the minimum still lets the version start.
+        assert_eq!(capped(base, Some(512)).max_mb, base.min_mb);
+    }
 
     const MODERN: &str = "2024-06-13T08:24:03+00:00";
     const OLD: &str = "2014-06-26T10:00:00+00:00";

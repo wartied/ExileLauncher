@@ -15,6 +15,7 @@ mod net;
 mod paths;
 mod secure_store;
 mod skin;
+mod skin3d;
 mod theme;
 mod update;
 mod versions;

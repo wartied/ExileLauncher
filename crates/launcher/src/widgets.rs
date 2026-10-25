@@ -27,7 +27,7 @@ pub fn filled_button(ui: &mut Ui, label: &str, size: Vec2, kind: Kind, enabled: 
             ),
         };
         let (fill, text) = if !enabled {
-            (SURFACE_ACTIVE, TEXT_FAINT)
+            (surface_active(), text_faint())
         } else if response.is_pointer_button_down_on() {
             (pressed, Color32::WHITE)
         } else if response.hovered() {
@@ -52,7 +52,7 @@ pub fn button(ui: &mut Ui, label: &str) -> Response {
 
 pub fn button_enabled(ui: &mut Ui, enabled: bool, label: &str) -> Response {
     let width = text_width(ui, label, &FontId::proportional(14.0)) + 32.0;
-    outline_button(ui, label, vec2(width, BUTTON_HEIGHT), enabled, TEXT)
+    outline_button(ui, label, vec2(width, BUTTON_HEIGHT), enabled, theme::text())
 }
 
 /// Bordered button with an explicit size and label colour.
@@ -61,13 +61,13 @@ pub fn outline_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool, color
     let (rect, response) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
         let (fill, stroke) = if !enabled {
-            (SURFACE, BORDER)
+            (surface(), border())
         } else if response.is_pointer_button_down_on() {
-            (SURFACE_ACTIVE, BORDER_STRONG)
+            (surface_active(), border_strong())
         } else if response.hovered() {
-            (SURFACE_HOVER, BORDER_STRONG)
+            (surface_hover(), border_strong())
         } else {
-            (SURFACE, BORDER)
+            (surface(), border())
         };
         let painter = ui.painter();
         // Inset by half a pixel so the 1px border lands exactly on pixel edges.
@@ -78,14 +78,14 @@ pub fn outline_button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool, color
             Stroke::new(1.0, stroke),
             egui::StrokeKind::Inside,
         );
-        let text = if enabled { color } else { TEXT_FAINT };
+        let text = if enabled { color } else { text_faint() };
         paint_text(ui, rect.center().x, egui::Align::Center, rect.center().y, label, FontId::proportional(14.0), text);
     }
     if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
 }
 
-pub fn text_width(ui: &Ui, text: &str, font: &FontId) -> f32 {
-    ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), TEXT).size().x)
+pub fn text_width(ui: &Ui, label: &str, font: &FontId) -> f32 {
+    ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), theme::text()).size().x)
 }
 
 /// Paints one line of text whose capital letters are vertically centred on
@@ -124,18 +124,18 @@ pub fn tabs(ui: &mut Ui, labels: &[&str], active: usize) -> Option<usize> {
     let font = FontId::new(14.0, theme::semibold());
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
     // Hairline under the whole row; the active tab's underline sits on top.
-    ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, BORDER));
+    ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, border()));
     let mut x = row.left();
     for (i, label) in labels.iter().enumerate() {
         let w = text_width(ui, label, &font);
         let rect = Rect::from_min_max(pos2(x, row.top()), pos2(x + w, row.bottom()));
         let response = ui.interact(rect, ui.scope_id().with(("tab", i)), Sense::click());
         let color = if i == active {
-            TEXT
+            theme::text()
         } else if response.hovered() {
-            TEXT_DIM
+            text_dim()
         } else {
-            TEXT_FAINT
+            text_faint()
         };
         paint_text(ui, x, egui::Align::Min, row.top() + 13.0, label, font.clone(), color);
         if i == active {
@@ -161,14 +161,14 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, enabled: bool) -> Response {
     }
     let t = ui.ctx().animate_bool(response.id, *on);
     let track = if !enabled {
-        SURFACE_ACTIVE
+        surface_active()
     } else {
-        lerp_color(BORDER_STRONG, BUTTON, t)
+        lerp_color(border_strong(), BUTTON, t)
     };
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(10), track);
     let knob_x = rect.left() + 10.0 + t * (rect.width() - 20.0);
-    let knob = if enabled { Color32::WHITE } else { TEXT_FAINT };
+    let knob = if enabled { Color32::WHITE } else { text_faint() };
     painter.circle_filled(pos2(knob_x, rect.center().y), 7.0, knob);
     if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
 }
@@ -184,25 +184,28 @@ pub fn segmented(ui: &mut Ui, options: &[(&str, bool)], active: usize, disabled_
     let font = FontId::proportional(13.0);
     let widths: Vec<f32> = options.iter().map(|(l, _)| text_width(ui, l, &font) + 24.0).collect();
     let total = widths.iter().sum::<f32>() + 4.0;
-    let (outer, _) = ui.allocate_exact_size(vec2(total, 30.0), Sense::hover());
-    ui.painter().rect(outer.shrink(0.5), CornerRadius::same(RADIUS), SURFACE, Stroke::new(1.0, BORDER), egui::StrokeKind::Inside);
+    let (outer, whole) = ui.allocate_exact_size(vec2(total, 30.0), Sense::hover());
+    // Segment ids come from this control's own (unique) id, so several
+    // segmented controls can share a parent.
+    let base = whole.id;
+    ui.painter().rect(outer.shrink(0.5), CornerRadius::same(RADIUS), surface(), Stroke::new(1.0, border()), egui::StrokeKind::Inside);
     let mut x = outer.left() + 2.0;
     let mut picked = None;
     for (i, ((label, enabled), w)) in options.iter().zip(&widths).enumerate() {
         let rect = Rect::from_min_size(pos2(x, outer.top() + 2.0), vec2(*w, outer.height() - 4.0));
         let sense = if *enabled { Sense::click() } else { Sense::hover() };
-        let response = ui.interact(rect, ui.scope_id().with(("seg", i)), sense);
+        let response = ui.interact(rect, base.with(i), sense);
         if i == active {
-            ui.painter().rect_filled(rect, CornerRadius::same(RADIUS - 2), SURFACE_ACTIVE);
+            ui.painter().rect_filled(rect, CornerRadius::same(RADIUS - 2), surface_active());
         } else if *enabled && response.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(RADIUS - 2), SURFACE_HOVER);
+            ui.painter().rect_filled(rect, CornerRadius::same(RADIUS - 2), surface_hover());
         }
         let color = if !enabled {
-            TEXT_FAINT
+            text_faint()
         } else if i == active {
-            TEXT
+            theme::text()
         } else {
-            TEXT_DIM
+            text_dim()
         };
         paint_text(ui, rect.center().x, egui::Align::Center, rect.center().y, label, font.clone(), color);
         let response = if *enabled {
@@ -233,8 +236,8 @@ pub fn short_count(n: u64) -> String {
 pub fn notice(ui: &mut Ui, color: Color32, text: &str, action: Option<&str>) -> bool {
     let mut clicked = false;
     let rect = Frame::new()
-        .fill(SURFACE)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(surface())
+        .stroke(Stroke::new(1.0, border()))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(Margin { left: 16, right: 8, top: 8, bottom: 8 })
         .show(ui, |ui| {
@@ -242,15 +245,15 @@ pub fn notice(ui: &mut Ui, color: Color32, text: &str, action: Option<&str>) -> 
             let font = FontId::proportional(14.0);
             let button_w = action.map(|a| text_width(ui, a, &font) + 32.0).unwrap_or(0.0);
             let text_w = (ui.available_width() - button_w - 12.0).max(80.0);
-            let galley = ui.painter().layout(text.to_owned(), font.clone(), TEXT, text_w);
+            let galley = ui.painter().layout(text.to_owned(), font.clone(), theme::text(), text_w);
             let single_line = galley.rows.len() <= 1;
             let height = galley.size().y.max(if action.is_some() { BUTTON_HEIGHT } else { 0.0 });
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
             if single_line {
                 // Same optical centring as button labels, so text and button line up.
-                paint_text(ui, row.left(), egui::Align::Min, row.center().y, text, font, TEXT);
+                paint_text(ui, row.left(), egui::Align::Min, row.center().y, text, font, theme::text());
             } else {
-                ui.painter().galley(row.left_top(), galley, TEXT);
+                ui.painter().galley(row.left_top(), galley, theme::text());
             }
             if let Some(a) = action {
                 let r = Rect::from_min_size(
@@ -270,14 +273,14 @@ pub fn notice(ui: &mut Ui, color: Color32, text: &str, action: Option<&str>) -> 
 
 /// Small capitalised heading above a group of controls.
 pub fn section_label(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text.to_uppercase()).size(11.0).color(TEXT_FAINT).extra_letter_spacing(1.2));
+    ui.label(RichText::new(text.to_uppercase()).size(11.0).color(text_faint()).extra_letter_spacing(1.2));
 }
 
 /// A flat panel used to group related controls.
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     Frame::new()
-        .fill(SURFACE)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(surface())
+        .stroke(Stroke::new(1.0, border()))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(Margin::same(16))
         .show(ui, |ui| {
@@ -308,10 +311,10 @@ pub fn paint_avatar(ui: &Ui, rect: Rect, face: Option<&TextureHandle>, name: &st
                 .paint_at(ui, rect);
         }
         None => {
-            ui.painter().rect_filled(rect, CornerRadius::same(4), SURFACE_ACTIVE);
+            ui.painter().rect_filled(rect, CornerRadius::same(4), surface_active());
             let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
             let font = FontId::new(rect.height() * 0.5, theme::semibold());
-            paint_text(ui, rect.center().x, egui::Align::Center, rect.center().y, &initial, font, TEXT_DIM);
+            paint_text(ui, rect.center().x, egui::Align::Center, rect.center().y, &initial, font, text_dim());
         }
     }
 }
@@ -329,9 +332,9 @@ pub fn instance_row(
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         let bg = if selected {
-            SURFACE_ACTIVE
+            surface_active()
         } else if response.hovered() {
-            SURFACE_HOVER
+            surface_hover()
         } else {
             Color32::TRANSPARENT
         };
@@ -347,15 +350,15 @@ pub fn instance_row(
         let title_galley = painter.layout_no_wrap(
             truncate(ui, title, FontId::new(14.0, theme::semibold()), max_text),
             FontId::new(14.0, theme::semibold()),
-            TEXT,
+            theme::text(),
         );
-        painter.galley(pos2(left, rect.top() + 8.0), title_galley, TEXT);
+        painter.galley(pos2(left, rect.top() + 8.0), title_galley, theme::text());
         let sub_galley = painter.layout_no_wrap(
             truncate(ui, subtitle, FontId::proportional(12.0), max_text),
             FontId::proportional(12.0),
-            TEXT_DIM,
+            text_dim(),
         );
-        painter.galley(pos2(left, rect.top() + 29.0), sub_galley, TEXT_DIM);
+        painter.galley(pos2(left, rect.top() + 29.0), sub_galley, text_dim());
 
         if let Some((text, color)) = badge {
             let font = FontId::proportional(12.0);
@@ -367,7 +370,7 @@ pub fn instance_row(
 
 /// Shortens `text` with an ellipsis so it fits in `max_width`.
 pub fn truncate(ui: &Ui, text: &str, font: FontId, max_width: f32) -> String {
-    let fits = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), TEXT).size().x) <= max_width;
+    let fits = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), theme::text()).size().x) <= max_width;
     if fits(text) {
         return text.to_owned();
     }
@@ -384,15 +387,15 @@ pub fn truncate(ui: &Ui, text: &str, font: FontId, max_width: f32) -> String {
 /// Frame used by every dialog.
 pub fn dialog_frame() -> Frame {
     Frame::new()
-        .fill(SURFACE)
-        .stroke(Stroke::new(1.0, BORDER_STRONG))
+        .fill(surface())
+        .stroke(Stroke::new(1.0, border_strong()))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::same(24))
         .shadow(egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(120) })
 }
 
 pub fn dialog_title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(18.0).family(theme::semibold()).color(TEXT));
+    ui.label(RichText::new(text).size(18.0).family(theme::semibold()).color(theme::text()));
     ui.add_space(4.0);
 }
 

@@ -41,6 +41,12 @@ pub struct Session {
     pub uuid: String,
     pub name: String,
     pub skin_url: Option<String>,
+    /// The skin uses the slim (Alex) arms.
+    #[serde(default)]
+    pub skin_slim: bool,
+    /// Name of the cape the player is wearing, if any.
+    #[serde(default)]
+    pub cape: Option<String>,
 }
 
 impl std::fmt::Debug for Session {
@@ -81,17 +87,44 @@ pub fn requires_sign_in(err: &anyhow::Error) -> bool {
 // ---------------------------------------------------------------------------
 // Persistence
 
-pub fn load_saved() -> Option<Session> {
-    let bytes = secure_store::load(&paths::account_file()).ok()??;
-    serde_json::from_slice(&bytes).ok()
+/// Every signed-in account, and which one plays.
+#[derive(Default, Serialize, Deserialize)]
+pub struct Accounts {
+    pub accounts: Vec<Session>,
+    /// UUID of the active account.
+    pub active: Option<String>,
 }
 
-pub fn save(session: &Session) -> Result<()> {
-    secure_store::save(&paths::account_file(), &serde_json::to_vec(session)?)
+impl Accounts {
+    pub fn active(&self) -> Option<&Session> {
+        let uuid = self.active.as_deref()?;
+        self.accounts.iter().find(|s| s.uuid == uuid)
+    }
 }
 
-pub fn forget() {
-    secure_store::delete(&paths::account_file());
+/// Loads the saved accounts. Earlier versions kept a single session in the
+/// same file, which loads as the one (active) account.
+pub fn load_accounts() -> Accounts {
+    secure_store::load(&paths::account_file()).ok().flatten().map(|b| parse_accounts(&b)).unwrap_or_default()
+}
+
+fn parse_accounts(bytes: &[u8]) -> Accounts {
+    if let Ok(accounts) = serde_json::from_slice::<Accounts>(bytes) {
+        return accounts;
+    }
+    match serde_json::from_slice::<Session>(bytes) {
+        Ok(session) => Accounts { active: Some(session.uuid.clone()), accounts: vec![session] },
+        Err(_) => Accounts::default(),
+    }
+}
+
+/// Saves the accounts, encrypted (see `secure_store`). An empty list deletes the file.
+pub fn save_accounts(accounts: &Accounts) -> Result<()> {
+    if accounts.accounts.is_empty() {
+        secure_store::delete(&paths::account_file());
+        return Ok(());
+    }
+    secure_store::save(&paths::account_file(), &serde_json::to_vec(accounts)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -411,17 +444,16 @@ fn minecraft_session(ms: MsTokens) -> Result<Session> {
     }
     let uuid = str_field(&profile, "id").ok_or_else(|| anyhow!("profile has no id"))?;
     let name = str_field(&profile, "name").ok_or_else(|| anyhow!("profile has no name"))?;
-    let skin_url = profile
-        .get("skins")
+    let skin = profile.get("skins").and_then(Value::as_array).and_then(|skins| {
+        skins.iter().find(|s| s.get("state").and_then(Value::as_str) == Some("ACTIVE")).or_else(|| skins.first())
+    });
+    let skin_url = skin.and_then(|s| str_field(s, "url")).map(|u| u.replacen("http://", "https://", 1));
+    let skin_slim = skin.and_then(|s| str_field(s, "variant")).is_some_and(|v| v.eq_ignore_ascii_case("slim"));
+    let cape = profile
+        .get("capes")
         .and_then(Value::as_array)
-        .and_then(|skins| {
-            skins
-                .iter()
-                .find(|s| s.get("state").and_then(Value::as_str) == Some("ACTIVE"))
-                .or_else(|| skins.first())
-        })
-        .and_then(|s| str_field(s, "url"))
-        .map(|u| u.replacen("http://", "https://", 1));
+        .and_then(|capes| capes.iter().find(|c| c.get("state").and_then(Value::as_str) == Some("ACTIVE")))
+        .and_then(|c| str_field(c, "alias"));
 
     Ok(Session {
         refresh_token: ms.refresh_token,
@@ -430,6 +462,8 @@ fn minecraft_session(ms: MsTokens) -> Result<Session> {
         uuid,
         name,
         skin_url,
+        skin_slim,
+        cape,
     })
 }
 
@@ -467,15 +501,35 @@ mod tests {
     #[ignore]
     fn preview_session() {
         assert!(std::env::var_os("EXILE_HOME").is_some(), "refusing to touch the real profile");
-        save(&Session {
+        // Two accounts for the switcher: classic and slim skins. Put their
+        // skins in <EXILE_HOME>/skins/<uuid>.png to see them in 3D.
+        let account = |uuid: &str, name: &str, slim: bool, cape: Option<&str>| Session {
             refresh_token: String::new(),
             access_token: String::new(),
             expires_at: now() + 3600,
-            uuid: "00000000000000000000000000000000".into(),
-            name: "Steve".into(),
+            uuid: uuid.into(),
+            name: name.into(),
             skin_url: None,
-        })
-        .unwrap();
+            skin_slim: slim,
+            cape: cape.map(str::to_owned),
+        };
+        let steve = account("00000000000000000000000000000001", "Steve", false, Some("Migrator"));
+        let alex = account("00000000000000000000000000000002", "Alex", true, None);
+        save_accounts(&Accounts { active: Some(steve.uuid.clone()), accounts: vec![steve, alex] }).unwrap();
+    }
+
+    #[test]
+    fn old_single_account_file_still_loads() {
+        // What versions before account switching saved: one bare session.
+        let old = br#"{"refresh_token":"r","access_token":"a","expires_at":1,"uuid":"abc","name":"Steve","skin_url":null}"#;
+        let accounts = parse_accounts(old);
+        assert_eq!(accounts.accounts.len(), 1);
+        assert_eq!(accounts.active().map(|s| s.name.as_str()), Some("Steve"));
+        assert!(!accounts.accounts[0].skin_slim);
+        // And the new format round-trips.
+        let saved = serde_json::to_vec(&accounts).unwrap();
+        assert_eq!(parse_accounts(&saved).accounts[0].uuid, "abc");
+        assert!(parse_accounts(b"garbage").accounts.is_empty());
     }
 
     #[test]

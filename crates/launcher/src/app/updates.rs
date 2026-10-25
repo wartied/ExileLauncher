@@ -93,7 +93,7 @@ impl ExileApp {
     /// when there is one. Laid out right to left.
     pub(super) fn update_status(&mut self, ui: &mut Ui) {
         let version = ui
-            .add(egui::Label::new(RichText::new(format!("Exile {}", update::CURRENT)).size(12.0).color(TEXT_FAINT)).sense(egui::Sense::click()))
+            .add(egui::Label::new(RichText::new(format!("Exile {}", update::CURRENT)).size(12.0).color(text_faint())).sense(egui::Sense::click()))
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         egui::Popup::menu(&version)
             .align(egui::RectAlign::TOP_END)
@@ -115,12 +115,12 @@ impl ExileApp {
             }
             UpdateState::Downloading { version, progress } => {
                 ui.add_space(10.0);
-                ui.label(RichText::new(format!("Downloading {version} · {:.0}%", progress.fraction() * 100.0)).size(12.0).color(TEXT_DIM));
+                ui.label(RichText::new(format!("Downloading {version} · {:.0}%", progress.fraction() * 100.0)).size(12.0).color(text_dim()));
             }
             UpdateState::Ready { version, staged } => {
                 ui.add_space(10.0);
                 if self.busy() {
-                    ui.label(RichText::new(format!("Exile {version} installs when you close Exile")).size(12.0).color(TEXT_DIM));
+                    ui.label(RichText::new(format!("Exile {version} installs when you close Exile")).size(12.0).color(text_dim()));
                 } else if link(ui, format!("Restart to update to {version}"), ACCENT).clicked() {
                     match update::install(staged) {
                         Ok(()) => update::restart(),
@@ -130,7 +130,7 @@ impl ExileApp {
             }
             UpdateState::Failed(e) if self.settings.updates != UpdateMode::Off => {
                 ui.add_space(10.0);
-                ui.label(RichText::new("Update failed").size(12.0).color(TEXT_FAINT)).on_hover_text(e.as_str());
+                ui.label(RichText::new("Update failed").size(12.0).color(text_faint())).on_hover_text(e.as_str());
             }
             _ => {}
         }
@@ -145,18 +145,14 @@ impl ExileApp {
         ui.set_min_width(280.0);
         ui.add_space(4.0);
         ui.label(RichText::new(format!("Exile {}", update::CURRENT)).family(semibold()));
-        ui.label(RichText::new("Launcher and Exile Client update together.").size(12.0).color(TEXT_DIM));
+        ui.label(RichText::new("Launcher and Exile Client update together.").size(12.0).color(text_dim()));
         ui.add_space(10.0);
-        ui.label(RichText::new("Updates").size(12.0).color(TEXT_DIM));
+        ui.label(RichText::new("Updates").size(12.0).color(text_dim()));
         ui.add_space(4.0);
         let modes = [UpdateMode::Auto, UpdateMode::Ask, UpdateMode::Off];
         let active = modes.iter().position(|m| *m == self.settings.updates).unwrap_or(1);
         if let Some(i) = widgets::segmented(ui, &[("Automatic", true), ("Ask me", true), ("Off", true)], active, "") {
-            self.settings.updates = modes[i];
-            self.settings.save();
-            if self.settings.updates != UpdateMode::Off && matches!(self.update, UpdateState::Idle | UpdateState::Failed(_)) {
-                self.check_for_update();
-            }
+            self.set_update_mode(modes[i]);
         }
         ui.add_space(6.0);
         let hint = match self.settings.updates {
@@ -164,36 +160,56 @@ impl ExileApp {
             UpdateMode::Ask => "Shows when an update is available; you choose when.",
             UpdateMode::Off => "Never checks. Get new versions from exiles.dev.",
         };
-        ui.label(RichText::new(hint).size(12.0).color(TEXT_DIM));
+        ui.label(RichText::new(hint).size(12.0).color(text_dim()));
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             let checking = matches!(self.update, UpdateState::Checking | UpdateState::Downloading { .. });
             if widgets::button_enabled(ui, !checking, "Check now").clicked() {
                 self.check_for_update();
             }
-            let status = match &self.update {
-                UpdateState::Checking => "Checking…".to_owned(),
-                UpdateState::UpToDate => "You're up to date.".to_owned(),
-                UpdateState::Available(r) => format!("{} is available.", r.version),
-                UpdateState::Downloading { version, progress } => format!("Downloading {version}: {:.0}%", progress.fraction() * 100.0),
-                UpdateState::Ready { version, .. } => format!("{version} is ready."),
-                UpdateState::Failed(_) => "Update failed.".to_owned(),
-                UpdateState::Idle => String::new(),
-            };
-            ui.label(RichText::new(status).size(12.0).color(TEXT_DIM));
+            ui.label(RichText::new(self.update_summary()).size(12.0).color(text_dim()));
         });
         match &self.update {
             UpdateState::Available(r) if !r.notes.trim().is_empty() => {
                 ui.add_space(8.0);
-                ui.label(RichText::new(r.notes.trim()).size(12.0).color(TEXT_DIM));
+                ui.label(RichText::new(r.notes.trim()).size(12.0).color(text_dim()));
             }
             UpdateState::Failed(e) => {
                 ui.add_space(8.0);
-                ui.label(RichText::new(e.as_str()).size(12.0).color(TEXT_DIM));
+                ui.label(RichText::new(e.as_str()).size(12.0).color(text_dim()));
             }
             _ => {}
         }
         ui.add_space(4.0);
+    }
+
+    /// Changes the update setting (Settings, Launcher, and the version menu).
+    pub(super) fn set_update_mode(&mut self, mode: UpdateMode) {
+        self.settings.updates = mode;
+        self.settings.save();
+        if mode != UpdateMode::Off && matches!(self.update, UpdateState::Idle | UpdateState::Failed(_)) {
+            self.check_for_update();
+        }
+    }
+
+    /// "Check now", unless a check or download is already running.
+    pub(super) fn check_for_update_now(&mut self) {
+        if !matches!(self.update, UpdateState::Checking | UpdateState::Downloading { .. }) {
+            self.check_for_update();
+        }
+    }
+
+    /// One line about where updates stand.
+    pub(super) fn update_summary(&self) -> String {
+        match &self.update {
+            UpdateState::Checking => "Checking…".to_owned(),
+            UpdateState::UpToDate => "You're up to date.".to_owned(),
+            UpdateState::Available(r) => format!("{} is available. Use the link in the status bar to install it.", r.version),
+            UpdateState::Downloading { version, progress } => format!("Downloading {version}: {:.0}%", progress.fraction() * 100.0),
+            UpdateState::Ready { version, .. } => format!("{version} is ready and installs when you restart Exile."),
+            UpdateState::Failed(_) => "Update failed.".to_owned(),
+            UpdateState::Idle => String::new(),
+        }
     }
 
     /// True while something on screen is moving (the download percentage).

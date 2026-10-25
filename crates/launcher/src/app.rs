@@ -5,6 +5,7 @@
 //! The UI thread only ever reads atomics or owned state, so it never stalls.
 
 mod mods_tab;
+mod settings;
 mod updates;
 
 use std::collections::{HashMap, HashSet};
@@ -36,8 +37,23 @@ use crate::{install, paths, skin};
 
 enum Account {
     SignedOut,
-    SigningIn { cancel: Arc<AtomicBool> },
+    /// `previous` is the account that was active when "Add account" was
+    /// pressed; it comes back if this sign-in is cancelled or fails.
+    SigningIn { cancel: Arc<AtomicBool>, previous: Option<Box<Session>> },
     SignedIn { session: Session, refreshing: bool },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Instances,
+    Settings(settings::Tab),
+}
+
+/// One account's skin, as GPU textures.
+struct SkinTextures {
+    face: TextureHandle,
+    full: TextureHandle,
+    legacy: bool,
 }
 
 enum Versions {
@@ -115,7 +131,7 @@ enum Event {
     Versions(Result<Vec<ManifestEntry>, String>),
     SignIn(Result<Session, String>),
     Refreshed(Result<Session, (String, bool)>),
-    Face(Option<skin::Face>),
+    Skin { uuid: String, skin: Option<skin::Skin> },
     Existing(Vec<ExistingGame>),
     TaskDone { id: String, outcome: TaskOutcome, session: Option<Session>, sign_out: bool },
     ModSearch { seq: u64, result: Result<Vec<SearchHit>, String> },
@@ -134,7 +150,12 @@ pub struct ExileApp {
     selected: Option<String>,
     versions: Versions,
     account: Account,
-    face: Option<TextureHandle>,
+    /// Signed-in accounts other than the active one.
+    others: Vec<Session>,
+    /// Skins by account UUID.
+    skins: HashMap<String, SkinTextures>,
+    page: Page,
+    skin_view: crate::skin3d::SkinView,
     tasks: HashMap<String, Task>,
     errors: HashMap<String, String>,
     last_exit: HashMap<String, Exited>,
@@ -183,7 +204,10 @@ impl ExileApp {
             selected,
             versions: Versions::Loading,
             account: Account::SignedOut,
-            face: None,
+            others: Vec::new(),
+            skins: HashMap::new(),
+            page: Page::Instances,
+            skin_view: Default::default(),
             tasks: HashMap::new(),
             errors: HashMap::new(),
             last_exit: HashMap::new(),
@@ -208,14 +232,25 @@ impl ExileApp {
         }
 
         app.load_versions();
-        if let Some(session) = auth::load_saved() {
-            app.set_face(skin::cached_face());
-            let refresh = session.needs_refresh();
-            app.fetch_face(session.skin_url.clone());
-            app.account = Account::SignedIn { session, refreshing: false };
-            if refresh {
-                app.refresh_session();
+        theme::set_dark(&app.ctx, app.settings.dark_theme);
+        app.apply_ui_scale(app.settings.ui_scale);
+        // Before multiple accounts there was one skin.png; each account has its own now.
+        let _ = std::fs::remove_file(paths::root().join("skin.png"));
+        let saved = auth::load_accounts();
+        let active_uuid = saved.active().map(|s| s.uuid.clone()).or_else(|| saved.accounts.first().map(|s| s.uuid.clone()));
+        for session in saved.accounts {
+            if let Some(skin) = skin::cached(&session.uuid) {
+                app.set_skin(&session.uuid, skin);
             }
+            app.fetch_skin(&session);
+            if Some(&session.uuid) == active_uuid.as_ref() {
+                app.account = Account::SignedIn { session, refreshing: false };
+            } else {
+                app.others.push(session);
+            }
+        }
+        if app.session().is_some_and(Session::needs_refresh) {
+            app.refresh_session();
         }
         let instances = app.instances.clone();
         app.spawn(move || Event::Existing(launch::find_existing(&instances)));
@@ -236,14 +271,78 @@ impl ExileApp {
         self.spawn(|| Event::Versions(versions::load_manifest().map_err(|e| format!("{e:#}"))));
     }
 
-    fn fetch_face(&self, url: Option<String>) {
-        self.spawn(move || Event::Face(skin::load_face(url.as_deref()).ok()));
+    fn fetch_skin(&self, session: &Session) {
+        let (uuid, url) = (session.uuid.clone(), session.skin_url.clone());
+        self.spawn(move || Event::Skin { skin: skin::load(&uuid, url.as_deref()).ok(), uuid });
     }
 
-    fn set_face(&mut self, face: Option<skin::Face>) {
-        self.face = face.map(|px| {
-            self.ctx.load_texture("player-face", ColorImage::from_rgba_unmultiplied([8, 8], &px), TextureOptions::NEAREST)
-        });
+    fn set_skin(&mut self, uuid: &str, skin: skin::Skin) {
+        let face = self.ctx.load_texture(format!("face-{uuid}"), ColorImage::from_rgba_unmultiplied([8, 8], &skin.face), TextureOptions::NEAREST);
+        let full = self.ctx.load_texture(format!("skin-{uuid}"), ColorImage::from_rgba_unmultiplied([64, 64], &skin.texture), TextureOptions::NEAREST);
+        self.skins.insert(uuid.to_owned(), SkinTextures { face, full, legacy: skin.legacy });
+    }
+
+    fn face(&self, uuid: &str) -> Option<&TextureHandle> {
+        self.skins.get(uuid).map(|s| &s.face)
+    }
+
+    /// Saves every signed-in account (the active one first).
+    fn persist_accounts(&mut self) {
+        let mut accounts: Vec<Session> = self.session().cloned().into_iter().collect();
+        accounts.extend(self.others.iter().cloned());
+        let saved = auth::Accounts { active: self.session().map(|s| s.uuid.clone()), accounts };
+        if let Err(e) = auth::save_accounts(&saved) {
+            self.show_message("Couldn't save your accounts", format!("{e:#}"));
+        }
+    }
+
+    /// A newer copy of a signed-in account (after a refresh or a launch).
+    fn update_session(&mut self, session: Session) {
+        if let Account::SignedIn { session: active, refreshing } = &mut self.account
+            && active.uuid == session.uuid
+        {
+            *active = session;
+            *refreshing = false;
+        } else if let Some(other) = self.others.iter_mut().find(|o| o.uuid == session.uuid) {
+            *other = session;
+        } else {
+            return;
+        }
+        self.persist_accounts();
+    }
+
+    /// Makes another signed-in account the one that plays.
+    fn switch_account(&mut self, uuid: &str) {
+        let Some(i) = self.others.iter().position(|o| o.uuid == uuid) else { return };
+        let next = self.others.remove(i);
+        if let Account::SignedIn { session, .. } = std::mem::replace(&mut self.account, Account::SignedOut) {
+            self.others.insert(i, session);
+        }
+        let refresh = next.needs_refresh();
+        self.account = Account::SignedIn { session: next, refreshing: false };
+        self.persist_accounts();
+        self.skin_view.restart();
+        if refresh {
+            self.refresh_session();
+        }
+    }
+
+    /// Sets the interface size. The window's minimum grows with it, so the
+    /// layout always has the room it was designed for.
+    fn apply_ui_scale(&self, scale: f32) {
+        // Viewport sizes are in zoomed points (egui-winit multiplies by the
+        // zoom), so the same minimum in points means a larger window.
+        const MIN: egui::Vec2 = egui::vec2(860.0, 560.0);
+        let old = self.ctx.zoom_factor();
+        self.ctx.set_zoom_factor(scale);
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN));
+        // Grow the window if it's now too small; never shrink it.
+        if let Some(rect) = self.ctx.input(|i| i.viewport().inner_rect) {
+            let size = rect.size() * old / scale;
+            if size.x < MIN.x || size.y < MIN.y {
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size.max(MIN)));
+            }
+        }
     }
 
     fn session(&self) -> Option<&Session> {
@@ -298,10 +397,20 @@ impl ExileApp {
         id
     }
 
+    /// Signs in another account (or the first). The current one stays aside
+    /// until this finishes and comes back if it's cancelled or fails.
     fn sign_in(&mut self) {
         let Some(client_id) = self.client_id_or_explain() else { return };
         let cancel = Arc::new(AtomicBool::new(false));
-        self.account = Account::SigningIn { cancel: cancel.clone() };
+        let previous = match std::mem::replace(&mut self.account, Account::SignedOut) {
+            Account::SignedIn { session, .. } => Some(Box::new(session)),
+            Account::SigningIn { previous, cancel } => {
+                cancel.store(true, Ordering::Relaxed);
+                previous
+            }
+            Account::SignedOut => None,
+        };
+        self.account = Account::SigningIn { cancel: cancel.clone(), previous };
         self.spawn(move || {
             let result = auth::sign_in(&client_id, &cancel);
             Event::SignIn(match result {
@@ -312,15 +421,34 @@ impl ExileApp {
         });
     }
 
-    fn sign_out(&mut self) {
-        if let Account::SigningIn { cancel } = &self.account {
+    /// Stops a sign-in in progress and goes back to the account before it.
+    fn cancel_sign_in(&mut self) {
+        if let Account::SigningIn { cancel, previous } = std::mem::replace(&mut self.account, Account::SignedOut) {
             cancel.store(true, Ordering::Relaxed);
+            if let Some(session) = previous {
+                self.account = Account::SignedIn { session: *session, refreshing: false };
+            }
         }
-        auth::forget();
-        skin::clear_cache();
-        self.account = Account::SignedOut;
-        // Dropping the handle frees the GPU texture.
-        self.face = None;
+    }
+
+    /// Signs the active account out of Exile; the next one (if any) takes over.
+    fn sign_out(&mut self) {
+        self.cancel_sign_in();
+        if let Account::SignedIn { session, .. } = std::mem::replace(&mut self.account, Account::SignedOut) {
+            skin::forget(&session.uuid);
+            // Dropping the handles frees the GPU textures.
+            self.skins.remove(&session.uuid);
+        }
+        if !self.others.is_empty() {
+            let next = self.others.remove(0);
+            let refresh = next.needs_refresh();
+            self.account = Account::SignedIn { session: next, refreshing: false };
+            self.skin_view.restart();
+            if refresh {
+                self.refresh_session();
+            }
+        }
+        self.persist_accounts();
     }
 
     fn refresh_session(&mut self) {
@@ -340,14 +468,14 @@ impl ExileApp {
 
     fn create_instance(&mut self, name: String, entry: ManifestEntry, with_client: bool) {
         let needs = memory::needs_for(&entry.release_time);
-        let limits = memory::limits(self.sys.total_mb, needs);
+        let limits = memory::capped(memory::limits(self.sys.total_mb, needs), self.settings.max_memory_mb);
         let name = if name.trim().is_empty() { entry.id.clone() } else { name.trim().to_owned() };
         let inst = Instance {
             id: instance::new_id(&name, &self.instances),
             name,
             version: entry.id.clone(),
             release_time: entry.release_time.clone(),
-            memory_mb: limits.recommended_mb,
+            memory_mb: self.settings.default_memory_mb.map_or(limits.recommended_mb, |mb| memory::sanitize(mb, limits)),
             created: unix_now(),
             last_played: None,
             client: with_client,
@@ -376,7 +504,8 @@ impl ExileApp {
             Some(_) => self.mods.get(&inst.id).map_or(0, ModsCache::enabled_count),
             None => 0,
         };
-        memory::limits(self.sys.total_mb, memory::with_mods(memory::needs_for(&inst.release_time), mod_count))
+        let limits = memory::limits(self.sys.total_mb, memory::with_mods(memory::needs_for(&inst.release_time), mod_count));
+        memory::capped(limits, self.settings.max_memory_mb)
     }
 
     /// Entry point for the Play button: memory checks first, then launch.
@@ -384,6 +513,17 @@ impl ExileApp {
     /// the hard budget is still enforced.
     fn play(&mut self, id: &str, low_memory_ok: bool) {
         if self.session().is_none() || self.games.is_running(id) || self.tasks.contains_key(id) {
+            return;
+        }
+        // Settings, Games: how many may run at once (starting ones count too).
+        if let Some(max) = self.settings.max_running
+            && self.games.running.len() + self.tasks.values().filter(|t| t.launch_heap.is_some()).count() >= max as usize
+        {
+            let what = if max == 1 { "one game".to_owned() } else { format!("{max} games") };
+            self.show_message(
+                "Too many games running",
+                format!("Exile is set to run {what} at a time. Close one, or change this in Settings, Games."),
+            );
             return;
         }
         // Mods may have been added to the folder by hand since the last look.
@@ -512,17 +652,25 @@ impl ExileApp {
                 Event::Versions(Err(e)) => self.versions = Versions::Failed(e),
                 Event::SignIn(result) => match result {
                     Ok(session) => {
-                        if let Err(e) = auth::save(&session) {
-                            self.show_message("Couldn't save your sign-in", format!("{e:#}"));
+                        // The account that was active before goes into the switcher.
+                        if let Account::SigningIn { previous: Some(previous), .. } =
+                            std::mem::replace(&mut self.account, Account::SignedOut)
+                            && previous.uuid != session.uuid
+                        {
+                            self.others.insert(0, *previous);
                         }
-                        self.fetch_face(session.skin_url.clone());
+                        // Signing in again as a known account replaces it.
+                        self.others.retain(|o| o.uuid != session.uuid);
+                        self.fetch_skin(&session);
                         self.account = Account::SignedIn { session, refreshing: false };
+                        self.persist_accounts();
+                        self.skin_view.restart();
                         // Bring the launcher back in front of the browser.
                         self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     Err(e) => {
-                        self.account = Account::SignedOut;
+                        self.cancel_sign_in();
                         if !e.is_empty() {
                             self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                             self.show_message("Sign-in failed", e);
@@ -531,9 +679,8 @@ impl ExileApp {
                 },
                 Event::Refreshed(result) => match result {
                     Ok(session) => {
-                        let _ = auth::save(&session);
-                        self.fetch_face(session.skin_url.clone());
-                        self.account = Account::SignedIn { session, refreshing: false };
+                        self.fetch_skin(&session);
+                        self.update_session(session);
                     }
                     Err((msg, sign_in_required)) => {
                         if sign_in_required {
@@ -545,9 +692,12 @@ impl ExileApp {
                         }
                     }
                 },
-                Event::Face(face) => {
-                    if face.is_some() && self.session().is_some() {
-                        self.set_face(face);
+                Event::Skin { uuid, skin } => {
+                    let known = self.session().is_some_and(|s| s.uuid == uuid) || self.others.iter().any(|o| o.uuid == uuid);
+                    if let Some(skin) = skin
+                        && known
+                    {
+                        self.set_skin(&uuid, skin);
                     }
                 }
                 Event::Existing(found) => self.games.adopt(found),
@@ -557,8 +707,7 @@ impl ExileApp {
                 Event::TaskDone { id, outcome, session, sign_out } => {
                     self.tasks.remove(&id);
                     if let Some(session) = session {
-                        let _ = auth::save(&session);
-                        self.account = Account::SignedIn { session, refreshing: false };
+                        self.update_session(session);
                     }
                     if sign_out {
                         self.sign_out();
@@ -573,6 +722,9 @@ impl ExileApp {
                                 .filter(|i| crate::aot::recording(i))
                                 .map(Instance::output_log);
                             self.games.add(id.clone(), heap_mb, child, recording_log);
+                            if self.settings.minimize_on_launch {
+                                self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                            }
                             if let Some(inst) = self.instance_mut(&id) {
                                 inst.last_played = Some(unix_now());
                                 let _ = inst.save();
@@ -635,7 +787,7 @@ impl eframe::App for ExileApp {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(SIDEBAR)
+                    .fill(sidebar())
                     .inner_margin(Margin::symmetric(20, 0))
                     .stroke(Stroke::NONE),
             )
@@ -644,24 +796,30 @@ impl eframe::App for ExileApp {
         egui::Panel::bottom("status")
             .exact_size(30.0)
             .show_separator_line(false)
-            .frame(Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(20, 0)))
+            .frame(Frame::new().fill(sidebar()).inner_margin(Margin::symmetric(20, 0)))
             .show(ui, |ui| self.status_bar(ui));
 
         egui::Panel::left("instances")
             .exact_size(260.0)
             .resizable(false)
             .show_separator_line(false)
-            .frame(Frame::new().fill(SIDEBAR).inner_margin(Margin { left: 12, right: 12, top: 12, bottom: 12 }))
-            .show(ui, |ui| self.sidebar(ui));
+            .frame(Frame::new().fill(sidebar()).inner_margin(Margin { left: 12, right: 12, top: 12, bottom: 12 }))
+            .show(ui, |ui| match self.page {
+                Page::Instances => self.sidebar(ui),
+                Page::Settings(tab) => self.settings_sidebar(ui, tab),
+            });
 
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(BG).inner_margin(Margin::symmetric(32, 26)))
-            .show(ui, |ui| self.details(ui));
+            .frame(Frame::new().fill(bg()).inner_margin(Margin::symmetric(32, 26)))
+            .show(ui, |ui| match self.page {
+                Page::Instances => self.details(ui),
+                Page::Settings(tab) => self.settings_page(ui, tab),
+            });
 
         // Hairlines between regions, drawn on top so panel fills never cover them.
         let screen = ui.ctx().content_rect();
         let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("exile-lines")));
-        let line = Stroke::new(1.0, BORDER);
+        let line = Stroke::new(1.0, border());
         painter.hline(screen.x_range(), screen.top() + 56.0, line);
         painter.hline(screen.x_range(), screen.bottom() - 30.0, line);
         painter.vline(screen.left() + 260.0, (screen.top() + 56.0)..=(screen.bottom() - 30.0), line);
@@ -677,25 +835,31 @@ impl eframe::App for ExileApp {
 impl ExileApp {
     fn top_bar(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
-            ui.label(RichText::new("EXILE").size(15.0).family(theme::semibold()).color(TEXT).extra_letter_spacing(3.0));
+            ui.label(RichText::new("EXILE").size(15.0).family(theme::semibold()).color(text()).extra_letter_spacing(3.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| match &self.account {
                 Account::SignedOut => {
                     if widgets::button(ui, "Sign in with Microsoft").clicked() {
                         self.sign_in();
                     }
-                }
-                Account::SigningIn { cancel } => {
-                    let cancel = cancel.clone();
-                    if widgets::button(ui, "Cancel").clicked() {
-                        cancel.store(true, Ordering::Relaxed);
-                        self.account = Account::SignedOut;
+                    if widgets::button(ui, "Settings").clicked() {
+                        self.open_settings(settings::Tab::Appearance);
                     }
-                    ui.label(RichText::new("Finish signing in in your browser…").color(TEXT_DIM));
-                    ui.add(egui::Spinner::new().size(14.0).color(TEXT_DIM));
+                }
+                Account::SigningIn { .. } => {
+                    if widgets::button(ui, "Cancel").clicked() {
+                        self.cancel_sign_in();
+                    }
+                    ui.label(RichText::new("Finish signing in in your browser…").color(text_dim()));
+                    ui.add(egui::Spinner::new().size(14.0).color(text_dim()));
                 }
                 Account::SignedIn { session, .. } => {
-                    let name = session.name.clone();
-                    let response = self.account_chip(ui, &name);
+                    let (name, uuid) = (session.name.clone(), session.uuid.clone());
+                    let response = self.account_chip(ui, &name, &uuid);
+                    let row = |ui: &mut Ui, label: &str| {
+                        ui.add(egui::Button::new(label).frame(false).min_size(vec2(ui.available_width(), 28.0)))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                    };
                     egui::Popup::menu(&response)
                         .align(egui::RectAlign::BOTTOM_END)
                         .gap(6.0)
@@ -704,15 +868,22 @@ impl ExileApp {
                             ui.set_min_width(200.0);
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
-                                widgets::avatar(ui, self.face.as_ref(), &name, 32.0);
+                                widgets::avatar(ui, self.face(&uuid), &name, 32.0);
                                 ui.vertical(|ui| {
                                     ui.label(RichText::new(&name).family(theme::semibold()));
-                                    ui.label(RichText::new("Minecraft: Java Edition").size(12.0).color(TEXT_DIM));
+                                    ui.label(RichText::new("Minecraft: Java Edition").size(12.0).color(text_dim()));
                                 });
                             });
                             ui.add_space(4.0);
                             ui.separator();
-                            if ui.add(egui::Button::new("Sign out").frame(false).min_size(vec2(ui.available_width(), 28.0))).clicked() {
+                            if row(ui, "Account") {
+                                self.open_settings(settings::Tab::Account);
+                            }
+                            if row(ui, "Settings") {
+                                self.open_settings(settings::Tab::Appearance);
+                            }
+                            ui.separator();
+                            if row(ui, "Sign out") {
                                 self.sign_out();
                             }
                         });
@@ -722,16 +893,16 @@ impl ExileApp {
     }
 
     /// Avatar plus username; clicking opens the account menu.
-    fn account_chip(&self, ui: &mut Ui, name: &str) -> egui::Response {
+    fn account_chip(&self, ui: &mut Ui, name: &str, uuid: &str) -> egui::Response {
         let font = egui::FontId::new(14.0, theme::semibold());
-        let text_w = ui.fonts_mut(|f| f.layout_no_wrap(name.to_owned(), font.clone(), TEXT).size().x);
+        let text_w = ui.fonts_mut(|f| f.layout_no_wrap(name.to_owned(), font.clone(), text()).size().x);
         let size = vec2(10.0 + 26.0 + 10.0 + text_w + 12.0, 36.0);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-        let bg = if response.hovered() || response.is_pointer_button_down_on() { SURFACE_HOVER } else { Color32::TRANSPARENT };
+        let bg = if response.hovered() || response.is_pointer_button_down_on() { surface_hover() } else { Color32::TRANSPARENT };
         ui.painter().rect_filled(rect, CornerRadius::same(RADIUS), bg);
         let face_rect = egui::Rect::from_min_size(rect.min + vec2(10.0, 5.0), vec2(26.0, 26.0));
-        widgets::paint_avatar(ui, face_rect, self.face.as_ref(), name);
-        widgets::paint_text(ui, face_rect.right() + 10.0, Align::Min, rect.center().y, name, font, TEXT);
+        widgets::paint_avatar(ui, face_rect, self.face(uuid), name);
+        widgets::paint_text(ui, face_rect.right() + 10.0, Align::Min, rect.center().y, name, font, text());
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 
@@ -741,7 +912,7 @@ impl ExileApp {
             ui.label(
                 RichText::new(format!("Memory  {} used of {}", fmt_mb(used), fmt_mb(self.sys.total_mb)))
                     .size(12.0)
-                    .color(TEXT_DIM),
+                    .color(text_dim()),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.update_status(ui);
@@ -754,7 +925,7 @@ impl ExileApp {
                             fmt_mb(self.games.total_footprint_mb())
                         ))
                         .size(12.0)
-                        .color(TEXT_DIM),
+                        .color(text_dim()),
                     );
                     widgets::status_dot(ui, ACCENT);
                 }
@@ -766,13 +937,13 @@ impl ExileApp {
         if let Some(task) = self.tasks.get(id) {
             let f = task.progress.fraction();
             return Some(if task.launch_heap.is_some() && f == 0.0 {
-                ("Starting".into(), TEXT_DIM)
+                ("Starting".into(), text_dim())
             } else {
-                (format!("{:.0}%", f * 100.0), TEXT_DIM)
+                (format!("{:.0}%", f * 100.0), text_dim())
             });
         }
         if let Some(g) = self.games.get(id) {
-            return Some(if g.saving_cache { ("Finishing".into(), TEXT_DIM) } else { ("Running".into(), ACCENT) });
+            return Some(if g.saving_cache { ("Finishing".into(), text_dim()) } else { ("Running".into(), ACCENT) });
         }
         if self.errors.contains_key(id) {
             return Some(("Error".into(), DANGER));
@@ -786,7 +957,7 @@ impl ExileApp {
             .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 10, bottom: 0 }))
             .show(ui, |ui| {
                 let w = ui.available_width();
-                if widgets::outline_button(ui, "New instance", vec2(w, 36.0), true, TEXT).clicked() {
+                if widgets::outline_button(ui, "New instance", vec2(w, 36.0), true, text()).clicked() {
                     self.open_new_instance();
                 }
             });
@@ -816,7 +987,7 @@ impl ExileApp {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.add_space(4.0);
-                    ui.label(RichText::new("Nothing here yet.").color(TEXT_FAINT));
+                    ui.label(RichText::new("Nothing here yet.").color(text_faint()));
                 });
             }
         });
@@ -848,10 +1019,10 @@ impl ExileApp {
         let limits = self.limits_for(&inst);
 
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(640.0);
+            ui.set_max_width(ui.available_width().min(640.0));
 
             // Title
-            ui.label(RichText::new(&inst.name).size(26.0).family(theme::semibold()).color(TEXT));
+            ui.label(RichText::new(&inst.name).size(26.0).family(theme::semibold()).color(text()));
             ui.add_space(2.0);
             let mut meta = format!("Minecraft {}", inst.version);
             if let Some(l) = &inst.loader {
@@ -860,7 +1031,7 @@ impl ExileApp {
             if let Some(t) = inst.last_played {
                 meta.push_str(&format!("  ·  Played {}", widgets::relative_time(t, unix_now())));
             }
-            ui.label(RichText::new(meta).color(TEXT_DIM));
+            ui.label(RichText::new(meta).color(text_dim()));
             ui.add_space(24.0);
 
             // Play / progress
@@ -868,10 +1039,10 @@ impl ExileApp {
                 let stage = p.stage();
                 let fraction = p.fraction();
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(if stage.is_empty() { "Preparing".to_owned() } else { stage }).color(TEXT));
+                    ui.label(RichText::new(if stage.is_empty() { "Preparing".to_owned() } else { stage }).color(text()));
                     if p.total_bytes.load(Ordering::Relaxed) > 0 {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(RichText::new(format!("{:.0}%", fraction * 100.0)).color(TEXT_DIM));
+                            ui.label(RichText::new(format!("{:.0}%", fraction * 100.0)).color(text_dim()));
                         });
                     }
                 });
@@ -888,14 +1059,14 @@ impl ExileApp {
                 }
             } else if let Some((used_mb, saving_cache)) = running {
                 ui.horizontal(|ui| {
-                    widgets::status_dot(ui, if saving_cache { TEXT_DIM } else { ACCENT });
+                    widgets::status_dot(ui, if saving_cache { text_dim() } else { ACCENT });
                     let used = if used_mb > 0 { format!(" · using {}", fmt_mb(used_mb)) } else { String::new() };
                     let status = if saving_cache { "Saving startup cache" } else { "Running" };
-                    ui.label(RichText::new(format!("{status}{used}")).color(TEXT));
+                    ui.label(RichText::new(format!("{status}{used}")).color(text()));
                 });
                 if saving_cache {
                     ui.add_space(2.0);
-                    ui.label(RichText::new("Takes about a minute, once. Later launches start faster.").color(TEXT_DIM));
+                    ui.label(RichText::new("Takes about a minute, once. Later launches start faster.").color(text_dim()));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -911,7 +1082,7 @@ impl ExileApp {
                 }
                 ui.add_space(6.0);
                 if !signed_in {
-                    ui.label(RichText::new("Sign in with your Microsoft account to play.").color(TEXT_DIM));
+                    ui.label(RichText::new("Sign in with your Microsoft account to play.").color(text_dim()));
                 } else if let Some(err) = self.errors.get(&id) {
                     ui.label(RichText::new(err).color(DANGER));
                 } else if let Some(exit) = self.last_exit.get(&id).filter(|e| !e.killed) {
@@ -972,9 +1143,9 @@ impl ExileApp {
         let mut value = memory::sanitize(inst.memory_mb, limits);
         widgets::card(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Allocated to the game").color(TEXT));
+                ui.label(RichText::new("Allocated to the game").color(text()));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(fmt_mb(value)).family(theme::semibold()).color(TEXT));
+                    ui.label(RichText::new(fmt_mb(value)).family(theme::semibold()).color(text()));
                 });
             });
             ui.add_space(6.0);
@@ -994,18 +1165,20 @@ impl ExileApp {
                 ))
                 .color(DANGER)
             } else {
+                let capped = self.settings.max_memory_mb.is_some_and(|cap| cap <= limits.max_mb);
                 RichText::new(format!(
-                    "Recommended {}  ·  {} – {} available on this computer",
+                    "Recommended {}  ·  {} – {} {}",
                     fmt_mb(limits.recommended_mb),
                     fmt_mb(limits.min_mb),
-                    fmt_mb(limits.max_mb)
+                    fmt_mb(limits.max_mb),
+                    if capped { "(your maximum, in Settings)" } else { "available on this computer" }
                 ))
                 .size(12.0)
-                .color(TEXT_DIM)
+                .color(text_dim())
             };
             ui.label(hint);
             if running {
-                ui.label(RichText::new("Changes apply the next time you play.").size(12.0).color(TEXT_FAINT));
+                ui.label(RichText::new("Changes apply the next time you play.").size(12.0).color(text_faint()));
             }
             if (response.changed() || response.drag_stopped())
                 && let Some(inst) = self.instance_mut(&id)
@@ -1031,11 +1204,11 @@ impl ExileApp {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let version = crate::client::version().unwrap_or("");
-                    ui.label(RichText::new(format!("Exile Client {version}")).color(TEXT));
+                    ui.label(RichText::new(format!("Exile Client {version}")).color(text()));
                     ui.label(
                         RichText::new("Measured performance tweaks, a minimal HUD and Frame Budget. In game, open it from the pause menu or with Right Shift.")
                             .size(12.0)
-                            .color(TEXT_DIM),
+                            .color(text_dim()),
                     );
                 });
             });
@@ -1078,9 +1251,9 @@ impl ExileApp {
     fn empty_state(&mut self, ui: &mut Ui) {
         ui.with_layout(Layout::top_down(Align::Center), |ui| {
             ui.add_space((ui.available_height() / 2.0 - 90.0).max(0.0));
-            ui.label(RichText::new("No instances yet").size(22.0).family(theme::semibold()).color(TEXT));
+            ui.label(RichText::new("No instances yet").size(22.0).family(theme::semibold()).color(text()));
             ui.add_space(4.0);
-            ui.label(RichText::new("Create an instance to pick a Minecraft version and install it.").color(TEXT_DIM));
+            ui.label(RichText::new("Create an instance to pick a Minecraft version and install it.").color(text_dim()));
             ui.add_space(20.0);
             if widgets::filled_button(ui, "Create instance", vec2(180.0, 40.0), Kind::Primary, true).clicked() {
                 self.open_new_instance();
@@ -1101,7 +1274,7 @@ impl ExileApp {
                 let r = modal.show(ctx, |ui| {
                     ui.set_width(380.0);
                     widgets::dialog_title(ui, title);
-                    ui.label(RichText::new(body.as_str()).color(TEXT_DIM));
+                    ui.label(RichText::new(body.as_str()).color(text_dim()));
                     let mut ok = false;
                     widgets::dialog_buttons(ui, |ui| {
                         ok = widgets::filled_button(ui, "OK", vec2(90.0, 32.0), Kind::Primary, true).clicked();
@@ -1143,7 +1316,7 @@ impl ExileApp {
                     widgets::dialog_title(ui, &format!("Delete \u{201c}{name}\u{201d}?"));
                     ui.label(
                         RichText::new("Its worlds, screenshots, resource packs and settings will be permanently deleted.")
-                            .color(TEXT_DIM),
+                            .color(text_dim()),
                     );
                     let (mut del, mut cancel) = (false, false);
                     widgets::dialog_buttons(ui, |ui| {
@@ -1162,7 +1335,7 @@ impl ExileApp {
                 let r = modal.show(ctx, |ui| {
                     ui.set_width(400.0);
                     widgets::dialog_title(ui, "Low memory");
-                    ui.label(RichText::new(message.as_str()).color(TEXT_DIM));
+                    ui.label(RichText::new(message.as_str()).color(text_dim()));
                     let (mut go, mut cancel) = (false, false);
                     widgets::dialog_buttons(ui, |ui| {
                         go = widgets::filled_button(ui, "Play anyway", vec2(120.0, 32.0), Kind::Primary, true).clicked();
@@ -1183,7 +1356,7 @@ impl ExileApp {
                     widgets::dialog_title(ui, "Force close Minecraft?");
                     ui.label(
                         RichText::new("Anything since the last autosave will be lost. Quitting from the game menu is safer.")
-                            .color(TEXT_DIM),
+                            .color(text_dim()),
                     );
                     let (mut stop, mut cancel) = (false, false);
                     widgets::dialog_buttons(ui, |ui| {
@@ -1208,7 +1381,7 @@ impl ExileApp {
                     widgets::dialog_title(ui, "New instance");
                     ui.add_space(8.0);
 
-                    ui.label(RichText::new("Name").size(12.0).color(TEXT_DIM));
+                    ui.label(RichText::new("Name").size(12.0).color(text_dim()));
                     ui.add(
                         egui::TextEdit::singleline(name)
                             .hint_text(version.clone().unwrap_or_else(|| "My world".into()))
@@ -1218,9 +1391,9 @@ impl ExileApp {
                     ui.add_space(10.0);
 
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Version").size(12.0).color(TEXT_DIM));
+                        ui.label(RichText::new("Version").size(12.0).color(text_dim()));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.checkbox(&mut show_snapshots, RichText::new("Show snapshots").size(12.0).color(TEXT_DIM));
+                            ui.checkbox(&mut show_snapshots, RichText::new("Show snapshots").size(12.0).color(text_dim()));
                         });
                     });
                     ui.add(
@@ -1232,8 +1405,8 @@ impl ExileApp {
                     ui.add_space(6.0);
 
                     Frame::new()
-                        .fill(theme::BG)
-                        .stroke(Stroke::new(1.0, BORDER))
+                        .fill(theme::bg())
+                        .stroke(Stroke::new(1.0, border()))
                         .corner_radius(CornerRadius::same(RADIUS))
                         .inner_margin(Margin::same(4))
                         .show(ui, |ui| {
@@ -1242,14 +1415,14 @@ impl ExileApp {
                             match &self.versions {
                                 Versions::Loading => {
                                     ui.centered_and_justified(|ui| {
-                                        ui.add(egui::Spinner::new().size(18.0).color(TEXT_DIM));
+                                        ui.add(egui::Spinner::new().size(18.0).color(text_dim()));
                                     });
                                 }
                                 Versions::Failed(err) => {
                                     ui.vertical_centered(|ui| {
                                         ui.add_space(70.0);
-                                        ui.label(RichText::new("Couldn't load the version list.").color(TEXT));
-                                        ui.label(RichText::new(err.as_str()).size(12.0).color(TEXT_FAINT));
+                                        ui.label(RichText::new("Couldn't load the version list.").color(text()));
+                                        ui.label(RichText::new(err.as_str()).size(12.0).color(text_faint()));
                                         ui.add_space(6.0);
                                         retry = widgets::button(ui, "Try again").clicked();
                                     });
@@ -1271,7 +1444,7 @@ impl ExileApp {
                                     }
                                     if shown.is_empty() {
                                         ui.centered_and_justified(|ui| {
-                                            ui.label(RichText::new("No matching versions").color(TEXT_FAINT));
+                                            ui.label(RichText::new("No matching versions").color(text_faint()));
                                         });
                                     }
                                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -1297,13 +1470,14 @@ impl ExileApp {
                         _ => None,
                     };
                     if let Some(e) = &entry {
-                        let limits = memory::limits(self.sys.total_mb, memory::needs_for(&e.release_time));
-                        let text = if limits.fits {
-                            format!("Uses {} of memory by default. You can change this later.", fmt_mb(limits.recommended_mb))
+                        let limits = memory::capped(memory::limits(self.sys.total_mb, memory::needs_for(&e.release_time)), self.settings.max_memory_mb);
+                        let note = if limits.fits {
+                            let default = self.settings.default_memory_mb.map_or(limits.recommended_mb, |mb| memory::sanitize(mb, limits));
+                            format!("Uses {} of memory by default. You can change this later.", fmt_mb(default))
                         } else {
                             "This computer doesn't have enough memory to run this version.".to_owned()
                         };
-                        ui.label(RichText::new(text).size(12.0).color(if limits.fits { TEXT_FAINT } else { DANGER }));
+                        ui.label(RichText::new(note).size(12.0).color(if limits.fits { text_faint() } else { DANGER }));
                         if crate::client::supports(&e.id) {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
@@ -1311,16 +1485,16 @@ impl ExileApp {
                                 ui.add_space(4.0);
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 1.0;
-                                    ui.label(RichText::new("Exile Client").color(TEXT));
+                                    ui.label(RichText::new("Exile Client").color(text()));
                                     ui.label(
                                         RichText::new("Performance, HUD and Frame Budget. Also installs Fabric, Sodium and Lithium.")
                                             .size(12.0)
-                                            .color(TEXT_FAINT),
+                                            .color(text_faint()),
                                     );
                                 });
                             });
                         } else if let Some(v) = crate::client::minecraft_version() {
-                            ui.label(RichText::new(format!("Exile Client is available for Minecraft {v}.")).size(12.0).color(TEXT_FAINT));
+                            ui.label(RichText::new(format!("Exile Client is available for Minecraft {v}.")).size(12.0).color(text_faint()));
                         }
                     }
 
@@ -1363,18 +1537,18 @@ fn version_row(ui: &mut Ui, v: &ManifestEntry, selected: bool) -> egui::Response
     let bg = if selected {
         ACCENT_DIM
     } else if response.hovered() {
-        SURFACE_HOVER
+        surface_hover()
     } else {
         Color32::TRANSPARENT
     };
     painter.rect_filled(rect, CornerRadius::same(4), bg);
-    widgets::paint_text(ui, rect.left() + 12.0, Align::Min, rect.center().y, &v.id, egui::FontId::proportional(14.0), TEXT);
+    widgets::paint_text(ui, rect.left() + 12.0, Align::Min, rect.center().y, &v.id, egui::FontId::proportional(14.0), text());
     let right = if v.is_release() {
         v.release_time.get(..10).unwrap_or("").to_owned()
     } else {
         format!("Snapshot  ·  {}", v.release_time.get(..10).unwrap_or(""))
     };
-    let color = if selected { TEXT } else { TEXT_FAINT };
+    let color = if selected { text() } else { text_faint() };
     widgets::paint_text(ui, rect.right() - 12.0, Align::Max, rect.center().y, &right, egui::FontId::proportional(12.0), color);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

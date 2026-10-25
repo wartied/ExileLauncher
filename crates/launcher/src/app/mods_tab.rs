@@ -209,9 +209,9 @@ impl ExileApp {
 
         if !LoaderKind::Fabric.supports(&inst.release_time) {
             widgets::card(ui, |ui| {
-                ui.label(RichText::new("Mods aren't available for this version").family(theme::semibold()).color(TEXT));
+                ui.label(RichText::new("Mods aren't available for this version").family(theme::semibold()).color(text()));
                 ui.label(
-                    RichText::new("Fabric, the mod loader Exile uses, supports Minecraft 1.14 and newer.").color(TEXT_DIM),
+                    RichText::new("Fabric, the mod loader Exile uses, supports Minecraft 1.14 and newer.").color(text_dim()),
                 );
             });
             return;
@@ -221,7 +221,7 @@ impl ExileApp {
             let setting_up = self.loader_jobs.contains(&id);
             let mut install = false;
             widgets::card(ui, |ui| {
-                ui.label(RichText::new("Add mods to this instance").family(theme::semibold()).color(TEXT));
+                ui.label(RichText::new("Add mods to this instance").family(theme::semibold()).color(text()));
                 ui.add_space(2.0);
                 ui.add(
                     egui::Label::new(
@@ -229,20 +229,20 @@ impl ExileApp {
                             "Mods run on Fabric, a lightweight mod loader. Exile installs it for you. \
                              Your worlds and settings stay as they are.",
                         )
-                        .color(TEXT_DIM),
+                        .color(text_dim()),
                     )
                     .wrap(),
                 );
                 ui.add_space(12.0);
                 if setting_up {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(14.0).color(TEXT_DIM));
-                        ui.label(RichText::new("Setting up Fabric…").color(TEXT_DIM));
+                        ui.add(egui::Spinner::new().size(14.0).color(text_dim()));
+                        ui.label(RichText::new("Setting up Fabric…").color(text_dim()));
                     });
                 } else {
                     install = widgets::filled_button(ui, "Install Fabric", vec2(150.0, 32.0), Kind::Primary, !busy).clicked();
                     if busy {
-                        ui.label(RichText::new("Close the game first.").size(12.0).color(TEXT_FAINT));
+                        ui.label(RichText::new("Close the game first.").size(12.0).color(text_faint()));
                     }
                 }
             });
@@ -260,7 +260,7 @@ impl ExileApp {
         let mut open_browser = false;
         let add_w = 120.0;
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 32.0), Layout::left_to_right(Align::Center), |ui| {
-            ui.label(RichText::new(spec.label()).color(TEXT_DIM));
+            ui.label(RichText::new(spec.label()).color(text_dim()));
             ui.add_space((ui.available_width() - add_w).max(0.0));
             open_browser = widgets::filled_button(ui, "Add mods", vec2(add_w, 32.0), Kind::Primary, true).clicked();
         });
@@ -354,10 +354,10 @@ impl ExileApp {
             .collect();
         for (title, f) in &jobs {
             ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(12.0).color(TEXT_DIM));
-                ui.label(RichText::new(format!("Installing {title}…")).color(TEXT_DIM));
+                ui.add(egui::Spinner::new().size(12.0).color(text_dim()));
+                ui.label(RichText::new(format!("Installing {title}…")).color(text_dim()));
                 if *f > 0.0 {
-                    ui.label(RichText::new(format!("{:.0}%", f * 100.0)).color(TEXT_FAINT));
+                    ui.label(RichText::new(format!("{:.0}%", f * 100.0)).color(text_faint()));
                 }
             });
         }
@@ -368,8 +368,8 @@ impl ExileApp {
         if views.is_empty() {
             if jobs.is_empty() {
                 widgets::card(ui, |ui| {
-                    ui.label(RichText::new("No mods yet").family(theme::semibold()).color(TEXT));
-                    ui.label(RichText::new("Use Add mods to search Modrinth and install mods with one click.").color(TEXT_DIM));
+                    ui.label(RichText::new("No mods yet").family(theme::semibold()).color(text()));
+                    ui.label(RichText::new("Use Add mods to search Modrinth and install mods with one click.").color(text_dim()));
                 });
             }
             return;
@@ -378,8 +378,8 @@ impl ExileApp {
         let mut toggled = None;
         let mut removed = None;
         Frame::new()
-            .fill(SURFACE)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(surface())
+            .stroke(Stroke::new(1.0, border()))
             .corner_radius(CornerRadius::same(8))
             .inner_margin(Margin::same(4))
             .show(ui, |ui| {
@@ -388,7 +388,7 @@ impl ExileApp {
                 for (i, v) in views.iter().enumerate() {
                     if i > 0 {
                         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                        ui.painter().hline(r.x_range().shrink(12.0), r.center().y, Stroke::new(1.0, BORDER));
+                        ui.painter().hline(r.x_range().shrink(12.0), r.center().y, Stroke::new(1.0, border()));
                     }
                     match mod_row(ui, v, !busy) {
                         RowAction::Toggle(on) => toggled = Some((v.file.clone(), on)),
@@ -399,7 +399,7 @@ impl ExileApp {
             });
         if busy {
             ui.add_space(6.0);
-            ui.label(RichText::new("Close the game to change mods.").size(12.0).color(TEXT_FAINT));
+            ui.label(RichText::new("Close the game to change mods.").size(12.0).color(text_faint()));
         }
         if let Some((file, on)) = toggled {
             self.toggle_mod(inst, &file, on);
@@ -456,7 +456,7 @@ impl ExileApp {
         let response = modal.show(&ctx, |ui| {
             ui.set_width(640.0);
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 30.0), Layout::left_to_right(Align::Center), |ui| {
-                ui.label(RichText::new("Add mods").size(18.0).family(theme::semibold()).color(TEXT));
+                ui.label(RichText::new("Add mods").size(18.0).family(theme::semibold()).color(text()));
                 let options = [("Modrinth", true), ("CurseForge", cf_ready)];
                 let seg_w = ["Modrinth", "CurseForge"]
                     .iter()
@@ -474,7 +474,7 @@ impl ExileApp {
             ui.label(
                 RichText::new(format!("For {}  ·  Minecraft {}  ·  {}", inst.name, inst.version, spec.kind.name()))
                     .size(12.0)
-                    .color(TEXT_DIM),
+                    .color(text_dim()),
             );
             ui.add_space(10.0);
 
@@ -490,8 +490,8 @@ impl ExileApp {
             ui.add_space(8.0);
 
             Frame::new()
-                .fill(theme::BG)
-                .stroke(Stroke::new(1.0, BORDER))
+                .fill(theme::bg())
+                .stroke(Stroke::new(1.0, border()))
                 .corner_radius(CornerRadius::same(RADIUS))
                 .inner_margin(Margin::same(4))
                 .show(ui, |ui| {
@@ -500,14 +500,14 @@ impl ExileApp {
                     match &b.results {
                         SearchState::Loading => {
                             ui.centered_and_justified(|ui| {
-                                ui.add(egui::Spinner::new().size(18.0).color(TEXT_DIM));
+                                ui.add(egui::Spinner::new().size(18.0).color(text_dim()));
                             });
                         }
                         SearchState::Failed(err) => {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(150.0);
-                                ui.label(RichText::new("Search failed").color(TEXT));
-                                ui.label(RichText::new(err.as_str()).size(12.0).color(TEXT_FAINT));
+                                ui.label(RichText::new("Search failed").color(text()));
+                                ui.label(RichText::new(err.as_str()).size(12.0).color(text_faint()));
                             });
                         }
                         SearchState::Ready(hits) if hits.is_empty() => {
@@ -518,7 +518,7 @@ impl ExileApp {
                                         inst.version,
                                         spec.kind.name()
                                     ))
-                                    .color(TEXT_FAINT),
+                                    .color(text_faint()),
                                 );
                             });
                         }
@@ -589,7 +589,7 @@ fn mod_row(ui: &mut Ui, v: &ModView, editable: bool) -> RowAction {
     let left = rect.left() + 12.0;
     let max_w = (controls.left() - left - 12.0).max(40.0);
     let title_font = egui::FontId::new(14.0, theme::semibold());
-    let title_color = if v.enabled { TEXT } else { TEXT_FAINT };
+    let title_color = if v.enabled { text() } else { text_faint() };
     let title = widgets::truncate(ui, v.title(), title_font.clone(), max_w);
     widgets::paint_text(ui, left, Align::Min, rect.top() + 17.0, &title, title_font, title_color);
 
@@ -602,7 +602,7 @@ fn mod_row(ui: &mut Ui, v: &ModView, editable: bool) -> RowAction {
     };
     let small = egui::FontId::proportional(12.0);
     let detail = widgets::truncate(ui, &detail, small.clone(), max_w);
-    widgets::paint_text(ui, left, Align::Min, rect.top() + 36.0, &detail, small.clone(), TEXT_FAINT);
+    widgets::paint_text(ui, left, Align::Min, rect.top() + 36.0, &detail, small.clone(), text_faint());
 
     if has_issues {
         let issues = widgets::truncate(ui, &v.issues.join("  ·  "), small.clone(), max_w);
@@ -622,7 +622,7 @@ enum HitState {
 fn hit_row(ui: &mut Ui, hit: &SearchHit, state: HitState, heavy: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 74.0), Sense::hover());
     if response.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), SURFACE_HOVER);
+        ui.painter().rect_filled(rect, CornerRadius::same(4), surface_hover());
     }
     let mut clicked = false;
     let controls_w = 116.0;
@@ -633,7 +633,7 @@ fn hit_row(ui: &mut Ui, hit: &SearchHit, state: HitState, heavy: bool) -> bool {
             clicked = widgets::outline_button(&mut c, "Install", vec2(84.0, 30.0), true, ACCENT_LIGHT).clicked();
         }
         HitState::Installing => {
-            c.label(RichText::new("Installing…").size(13.0).color(TEXT_DIM));
+            c.label(RichText::new("Installing…").size(13.0).color(text_dim()));
         }
         HitState::Installed => {
             c.label(RichText::new("Installed").size(13.0).color(ACCENT));
@@ -645,19 +645,19 @@ fn hit_row(ui: &mut Ui, hit: &SearchHit, state: HitState, heavy: bool) -> bool {
     let title_font = egui::FontId::new(14.0, theme::semibold());
     let title = widgets::truncate(ui, &hit.title, title_font.clone(), max_w * 0.7);
     let title_w = widgets::text_width(ui, &title, &title_font);
-    widgets::paint_text(ui, left, Align::Min, rect.top() + 17.0, &title, title_font, TEXT);
+    widgets::paint_text(ui, left, Align::Min, rect.top() + 17.0, &title, title_font, text());
     let small = egui::FontId::proportional(12.0);
     if !hit.author.is_empty() {
         let by = widgets::truncate(ui, &format!("by {}", hit.author), small.clone(), (max_w - title_w - 8.0).max(0.0));
-        widgets::paint_text(ui, left + title_w + 8.0, Align::Min, rect.top() + 17.0, &by, small.clone(), TEXT_FAINT);
+        widgets::paint_text(ui, left + title_w + 8.0, Align::Min, rect.top() + 17.0, &by, small.clone(), text_faint());
     }
     let desc = widgets::truncate(ui, &hit.description, small.clone(), max_w);
-    widgets::paint_text(ui, left, Align::Min, rect.top() + 37.0, &desc, small.clone(), TEXT_DIM);
+    widgets::paint_text(ui, left, Align::Min, rect.top() + 37.0, &desc, small.clone(), text_dim());
     let mut meta = format!("{} downloads", widgets::short_count(hit.downloads));
     if heavy {
         meta.push_str("  ·  ");
     }
-    widgets::paint_text(ui, left, Align::Min, rect.top() + 56.0, &meta, small.clone(), TEXT_FAINT);
+    widgets::paint_text(ui, left, Align::Min, rect.top() + 56.0, &meta, small.clone(), text_faint());
     if heavy {
         let x = left + widgets::text_width(ui, &meta, &small);
         widgets::paint_text(ui, x, Align::Min, rect.top() + 56.0, "Needs a strong graphics card", small, WARN);
