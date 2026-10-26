@@ -1,0 +1,10 @@
+[package]
+name = "exile-ui"
+version = "0.1.0"
+edition = "2024"
+description = "Exile's palette, fonts, widgets and icon, shared by the launcher and the installer"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+eframe = { version = "0.37", default-features = false }

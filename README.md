@@ -32,6 +32,9 @@ If `client/build/libs` has no jar, the launcher still builds, just without the E
 The binary is `target/release/exile.exe`. Release builds don't open a console window. Java doesn't need
 to be installed: Exile downloads the exact runtime Mojang ships for each Minecraft version.
 
+The Windows installer is built with `cargo build --release -p exile-installer`. On its own it can only
+uninstall; the release workflow packs exile.exe into it (`.github/scripts/pack_installer.py`).
+
 ## Microsoft sign-in
 
 **Forks:** please register your own app rather than reusing Exile's ID. Set it in
@@ -81,6 +84,6 @@ GNU General Public License, version 3, as published by the Free Software Foundat
 See [LICENSE](LICENSE).
 
 The bundled [Iosevka Aile](https://github.com/be5invis/Iosevka) font (subset) is licensed under the
-SIL Open Font License 1.1. See `crates/launcher/assets/fonts/LICENSE-Iosevka.md`.
+SIL Open Font License 1.1. See `crates/ui/assets/fonts/LICENSE-Iosevka.md`.
 
 Exile is not an official Minecraft product. It is not associated with Mojang or Microsoft.

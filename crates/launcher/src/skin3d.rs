@@ -29,6 +29,8 @@ pub struct Pose {
     pub left_arm: (f32, f32),
     pub right_leg: f32,
     pub left_leg: f32,
+    /// How far the cape swings back from hanging straight, in radians.
+    pub cape: f32,
     /// 0..1, for fading in.
     pub alpha: f32,
 }
@@ -42,6 +44,9 @@ struct Part {
     uv: (f32, f32),
     texels: [f32; 3],
     mirror: bool,
+    /// A cape: its outer face (the one that shows from behind) uses the
+    /// texture's front area, as in game.
+    cape: bool,
     /// Rotation centre and angles (x, y, z) applied before the whole-body turn.
     pivot: [f32; 3],
     rot: [f32; 3],
@@ -49,7 +54,7 @@ struct Part {
 
 impl Part {
     fn new(min: [f32; 3], size: [f32; 3], uv: (f32, f32)) -> Self {
-        Part { min, size, uv, texels: size, mirror: false, pivot: [0.0; 3], rot: [0.0; 3] }
+        Part { min, size, uv, texels: size, mirror: false, cape: false, pivot: [0.0; 3], rot: [0.0; 3] }
     }
 
     /// The same box grown by `by` on every side (the second skin layer).
@@ -79,7 +84,7 @@ fn rotate(p: [f32; 3], pivot: [f32; 3], r: [f32; 3]) -> [f32; 3] {
 }
 
 /// The model's boxes for this pose.
-fn parts(pose: &Pose, slim: bool, legacy: bool) -> Vec<Part> {
+fn parts(pose: &Pose, slim: bool, legacy: bool, cape: bool) -> Vec<Part> {
     let arm_w = if slim { 3.0 } else { 4.0 };
     let head = Part::new([-4.0, 24.0, -4.0], [8.0, 8.0, 8.0], (0.0, 0.0)).pivoted([0.0, 24.0, 0.0], [pose.head_pitch, pose.head_yaw, 0.0]);
     let body = Part::new([-4.0, 12.0, -2.0], [8.0, 12.0, 4.0], (16.0, 16.0));
@@ -107,6 +112,14 @@ fn parts(pose: &Pose, slim: bool, legacy: bool) -> Vec<Part> {
         out.push(right_leg.grown(0.25, (0.0, 32.0)));
         out.push(left_leg_base.grown(0.25, (0.0, 48.0)));
     }
+    if cape {
+        // 10x16x1, hanging from the shoulders just behind the jacket layer.
+        // Its texture sits below the skin in the atlas (v + 64).
+        out.push(Part {
+            cape: true,
+            ..Part::new([-5.0, 8.0, -3.3], [10.0, 16.0, 1.0], (0.0, 64.0)).pivoted([0.0, 24.0, -2.3], [pose.cape, 0.0, 0.0])
+        });
+    }
     out
 }
 
@@ -133,6 +146,11 @@ fn faces(p: &Part) -> [([[f32; 3]; 4], [f32; 4]); 6] {
         ([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], top),
         ([[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]], bottom),
     ];
+    if p.cape {
+        let front = list[0].1;
+        list[0].1 = list[1].1;
+        list[1].1 = front;
+    }
     if p.mirror {
         // A mirrored box swaps its side textures and flips every face.
         std::mem::swap(&mut right, &mut left);
@@ -147,7 +165,7 @@ fn faces(p: &Part) -> [([[f32; 3]; 4], [f32; 4]); 6] {
 
 /// Draws the model centred in `rect`. `texture` is the 64x64 skin with
 /// nearest filtering; without one the model is drawn in flat greys.
-pub fn paint(painter: &Painter, rect: Rect, texture: Option<TextureId>, slim: bool, legacy: bool, pose: &Pose) {
+pub fn paint(painter: &Painter, rect: Rect, texture: Option<TextureId>, slim: bool, legacy: bool, cape: bool, pose: &Pose) {
     // Seen from a little above, like a player looking at it.
     const VIEW_PITCH: f32 = 0.18;
     const FOCAL: f32 = 140.0;
@@ -163,7 +181,7 @@ pub fn paint(painter: &Painter, rect: Rect, texture: Option<TextureId>, slim: bo
         shade: f32,
     }
     let mut quads = Vec::with_capacity(96);
-    for part in parts(pose, slim, legacy) {
+    for part in parts(pose, slim, legacy, cape) {
         for (corners, uv) in faces(&part) {
             let world = corners.map(|c| {
                 let c = rotate(c, part.pivot, part.rot);
@@ -199,7 +217,8 @@ pub fn paint(painter: &Painter, rect: Rect, texture: Option<TextureId>, slim: bo
         u0 += INSET * sign;
         u1 -= INSET * sign;
         let (v0, v1) = (v0 + INSET, v1 - INSET);
-        let uv = [pos2(u0, v0), pos2(u1, v0), pos2(u1, v1), pos2(u0, v1)].map(|p| pos2(p.x / 64.0, p.y / 64.0));
+        // The texture is the skin with the cape below it (see skin::ATLAS).
+        let uv = [pos2(u0, v0), pos2(u1, v0), pos2(u1, v1), pos2(u0, v1)].map(|p| pos2(p.x / 64.0, p.y / 96.0));
         let s = (q.shade * 255.0) as u8;
         let color = match texture {
             Some(_) => Color32::from_rgba_premultiplied(s, s, s, 255),
@@ -330,6 +349,8 @@ impl SkinView {
             left_arm: (-swing - 0.06 * (idle * 1.1).sin(), 0.06 + 0.03 * (idle * 0.9 + PI).sin()),
             right_leg: -swing,
             left_leg: swing,
+            // Streams back while walking, then hangs almost straight and stirs.
+            cape: 0.1 + 0.45 * stride + 0.04 * (phase * 2.0).sin() * stride + 0.02 * (idle * 0.7).sin(),
             alpha: 1.0,
         }
     }
@@ -356,6 +377,14 @@ mod tests {
     }
 
     #[test]
+    fn cape_shows_its_front_from_behind() {
+        let cape = Part { cape: true, ..Part::new([-5.0, 8.0, -3.3], [10.0, 16.0, 1.0], (0.0, 64.0)) };
+        let f = faces(&cape);
+        // The face pointing away from the player (-z) carries the cape's front.
+        assert_eq!(f[1].1, [1.0, 65.0, 11.0, 81.0]);
+    }
+
+    #[test]
     fn front_normal_faces_the_viewer() {
         let head = Part::new([-4.0, 24.0, -4.0], [8.0, 8.0, 8.0], (0.0, 0.0));
         let c = faces(&head)[0].0;
@@ -366,8 +395,9 @@ mod tests {
     #[test]
     fn model_has_both_layers_unless_legacy() {
         let pose = Pose::default();
-        assert_eq!(parts(&pose, false, false).len(), 12);
-        assert_eq!(parts(&pose, true, true).len(), 7);
+        assert_eq!(parts(&pose, false, false, false).len(), 12);
+        assert_eq!(parts(&pose, true, true, false).len(), 7);
+        assert_eq!(parts(&pose, false, false, true).len(), 13);
     }
 
     #[test]

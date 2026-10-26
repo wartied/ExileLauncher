@@ -47,6 +47,66 @@ pub struct Session {
     /// Name of the cape the player is wearing, if any.
     #[serde(default)]
     pub cape: Option<String>,
+    /// Texture of that cape.
+    #[serde(default)]
+    pub cape_url: Option<String>,
+}
+
+/// What the Minecraft profile says about how the player looks.
+pub struct Profile {
+    pub uuid: String,
+    pub name: String,
+    pub skin_url: Option<String>,
+    pub skin_slim: bool,
+    pub cape: Option<String>,
+    pub cape_url: Option<String>,
+}
+
+impl Session {
+    /// Takes the name, skin and cape from a freshly fetched profile.
+    pub fn apply(&mut self, p: Profile) {
+        self.name = p.name;
+        self.skin_url = p.skin_url;
+        self.skin_slim = p.skin_slim;
+        self.cape = p.cape;
+        self.cape_url = p.cape_url;
+    }
+}
+
+fn https(u: String) -> String {
+    u.replacen("http://", "https://", 1)
+}
+
+fn parse_profile(profile: &Value) -> Result<Profile> {
+    let uuid = str_field(profile, "id").ok_or_else(|| anyhow!("profile has no id"))?;
+    let name = str_field(profile, "name").ok_or_else(|| anyhow!("profile has no name"))?;
+    let skin = profile.get("skins").and_then(Value::as_array).and_then(|skins| {
+        skins.iter().find(|s| s.get("state").and_then(Value::as_str) == Some("ACTIVE")).or_else(|| skins.first())
+    });
+    let cape = profile
+        .get("capes")
+        .and_then(Value::as_array)
+        .and_then(|capes| capes.iter().find(|c| c.get("state").and_then(Value::as_str) == Some("ACTIVE")));
+    Ok(Profile {
+        uuid,
+        name,
+        skin_url: skin.and_then(|s| str_field(s, "url")).map(https),
+        skin_slim: skin.and_then(|s| str_field(s, "variant")).is_some_and(|v| v.eq_ignore_ascii_case("slim")),
+        cape: cape.and_then(|c| str_field(c, "alias")),
+        cape_url: cape.and_then(|c| str_field(c, "url")).map(https),
+    })
+}
+
+/// The current profile for a signed-in account: picks up a changed skin,
+/// cape or name without signing in again. `None` when the token has expired
+/// (a refresh will fetch it anyway).
+pub fn fetch_profile(session: &Session) -> Result<Option<Profile>> {
+    let (status, profile) = get_json_auth(MC_PROFILE_URL, &session.access_token)?;
+    match status {
+        200 => parse_profile(&profile).map(Some),
+        401 | 403 => Ok(None),
+        _ => bail!("Could not load your Minecraft profile (HTTP {status})."),
+    }
 }
 
 impl std::fmt::Debug for Session {
@@ -442,18 +502,7 @@ fn minecraft_session(ms: MsTokens) -> Result<Session> {
     if status != 200 {
         bail!("Could not load your Minecraft profile (HTTP {status}).");
     }
-    let uuid = str_field(&profile, "id").ok_or_else(|| anyhow!("profile has no id"))?;
-    let name = str_field(&profile, "name").ok_or_else(|| anyhow!("profile has no name"))?;
-    let skin = profile.get("skins").and_then(Value::as_array).and_then(|skins| {
-        skins.iter().find(|s| s.get("state").and_then(Value::as_str) == Some("ACTIVE")).or_else(|| skins.first())
-    });
-    let skin_url = skin.and_then(|s| str_field(s, "url")).map(|u| u.replacen("http://", "https://", 1));
-    let skin_slim = skin.and_then(|s| str_field(s, "variant")).is_some_and(|v| v.eq_ignore_ascii_case("slim"));
-    let cape = profile
-        .get("capes")
-        .and_then(Value::as_array)
-        .and_then(|capes| capes.iter().find(|c| c.get("state").and_then(Value::as_str) == Some("ACTIVE")))
-        .and_then(|c| str_field(c, "alias"));
+    let Profile { uuid, name, skin_url, skin_slim, cape, cape_url } = parse_profile(&profile)?;
 
     Ok(Session {
         refresh_token: ms.refresh_token,
@@ -464,6 +513,7 @@ fn minecraft_session(ms: MsTokens) -> Result<Session> {
         skin_url,
         skin_slim,
         cape,
+        cape_url,
     })
 }
 
@@ -512,10 +562,34 @@ mod tests {
             skin_url: None,
             skin_slim: slim,
             cape: cape.map(str::to_owned),
+            cape_url: None,
         };
-        let steve = account("00000000000000000000000000000001", "Steve", false, Some("Migrator"));
+        // Optional test textures for the first account, e.g. from a local web server.
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let mut steve = account("00000000000000000000000000000001", "Steve", false, Some("Migrator"));
+        steve.skin_url = env("EXILE_PREVIEW_SKIN");
+        steve.cape_url = env("EXILE_PREVIEW_CAPE");
         let alex = account("00000000000000000000000000000002", "Alex", true, None);
         save_accounts(&Accounts { active: Some(steve.uuid.clone()), accounts: vec![steve, alex] }).unwrap();
+    }
+
+    #[test]
+    fn reads_skin_model_and_cape() {
+        let json: Value = serde_json::from_str(
+            r#"{"id":"abc","name":"Steve",
+                "skins":[{"state":"INACTIVE","url":"http://x/old","variant":"CLASSIC"},
+                         {"state":"ACTIVE","url":"http://textures.minecraft.net/s","variant":"SLIM"}],
+                "capes":[{"state":"ACTIVE","alias":"Migrator","url":"http://textures.minecraft.net/c"}]}"#,
+        )
+        .unwrap();
+        let p = parse_profile(&json).unwrap();
+        assert!(p.skin_slim);
+        assert_eq!(p.skin_url.as_deref(), Some("https://textures.minecraft.net/s"));
+        assert_eq!(p.cape.as_deref(), Some("Migrator"));
+        assert_eq!(p.cape_url.as_deref(), Some("https://textures.minecraft.net/c"));
+        let bare: Value = serde_json::from_str(r#"{"id":"abc","name":"Steve"}"#).unwrap();
+        let p = parse_profile(&bare).unwrap();
+        assert!(!p.skin_slim && p.cape.is_none() && p.skin_url.is_none());
     }
 
     #[test]

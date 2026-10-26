@@ -52,8 +52,12 @@ enum Page {
 /// One account's skin, as GPU textures.
 struct SkinTextures {
     face: TextureHandle,
+    /// Skin with the cape below it (see `skin::ATLAS`).
     full: TextureHandle,
     legacy: bool,
+    /// The image is laid out for slim arms.
+    slim: bool,
+    cape: bool,
 }
 
 enum Versions {
@@ -132,6 +136,7 @@ enum Event {
     SignIn(Result<Session, String>),
     Refreshed(Result<Session, (String, bool)>),
     Skin { uuid: String, skin: Option<skin::Skin> },
+    Profile { uuid: String, profile: Option<auth::Profile> },
     Existing(Vec<ExistingGame>),
     TaskDone { id: String, outcome: TaskOutcome, session: Option<Session>, sign_out: bool },
     ModSearch { seq: u64, result: Result<Vec<SearchHit>, String> },
@@ -139,6 +144,7 @@ enum Event {
     LoaderReady { instance_id: String, result: Result<LoaderSpec, String> },
     UpdateChecked(Result<Option<crate::update::Release>, String>),
     UpdateDownloaded(Result<(String, std::path::PathBuf), String>),
+    Changelog(Result<Vec<crate::changelog::Release>, String>),
 }
 
 pub struct ExileApp {
@@ -181,6 +187,7 @@ pub struct ExileApp {
     client_setup: HashSet<String>,
     update: updates::UpdateState,
     last_update_check: Option<Instant>,
+    changelog: settings::Changelog,
 }
 
 impl ExileApp {
@@ -226,6 +233,7 @@ impl ExileApp {
             client_setup: HashSet::new(),
             update: updates::UpdateState::Idle,
             last_update_check: None,
+            changelog: Default::default(),
         };
         if let Some(id) = app.selected.clone() {
             app.refresh_mods(&id);
@@ -243,6 +251,7 @@ impl ExileApp {
                 app.set_skin(&session.uuid, skin);
             }
             app.fetch_skin(&session);
+            app.fetch_profile(&session);
             if Some(&session.uuid) == active_uuid.as_ref() {
                 app.account = Account::SignedIn { session, refreshing: false };
             } else {
@@ -272,14 +281,25 @@ impl ExileApp {
     }
 
     fn fetch_skin(&self, session: &Session) {
-        let (uuid, url) = (session.uuid.clone(), session.skin_url.clone());
-        self.spawn(move || Event::Skin { skin: skin::load(&uuid, url.as_deref()).ok(), uuid });
+        let (uuid, url, cape) = (session.uuid.clone(), session.skin_url.clone(), session.cape_url.clone());
+        self.spawn(move || Event::Skin { skin: skin::load(&uuid, url.as_deref(), cape.as_deref()).ok(), uuid });
+    }
+
+    /// Picks up a changed name, skin or cape (made on minecraft.net, or
+    /// missing from an account saved by an older version). Expired tokens
+    /// are skipped: the refresh before playing fetches the profile anyway.
+    fn fetch_profile(&self, session: &Session) {
+        if session.needs_refresh() {
+            return;
+        }
+        let session = session.clone();
+        self.spawn(move || Event::Profile { uuid: session.uuid.clone(), profile: auth::fetch_profile(&session).ok().flatten() });
     }
 
     fn set_skin(&mut self, uuid: &str, skin: skin::Skin) {
         let face = self.ctx.load_texture(format!("face-{uuid}"), ColorImage::from_rgba_unmultiplied([8, 8], &skin.face), TextureOptions::NEAREST);
-        let full = self.ctx.load_texture(format!("skin-{uuid}"), ColorImage::from_rgba_unmultiplied([64, 64], &skin.texture), TextureOptions::NEAREST);
-        self.skins.insert(uuid.to_owned(), SkinTextures { face, full, legacy: skin.legacy });
+        let full = self.ctx.load_texture(format!("skin-{uuid}"), ColorImage::from_rgba_unmultiplied(skin::ATLAS, &skin.texture), TextureOptions::NEAREST);
+        self.skins.insert(uuid.to_owned(), SkinTextures { face, full, legacy: skin.legacy, slim: skin.slim, cape: skin.cape });
     }
 
     fn face(&self, uuid: &str) -> Option<&TextureHandle> {
@@ -648,6 +668,7 @@ impl ExileApp {
             match event {
                 Event::UpdateChecked(result) => self.on_update_checked(result),
                 Event::UpdateDownloaded(result) => self.on_update_downloaded(result),
+                Event::Changelog(result) => self.changelog.finish(result),
                 Event::Versions(Ok(list)) => self.versions = Versions::Ready(list),
                 Event::Versions(Err(e)) => self.versions = Versions::Failed(e),
                 Event::SignIn(result) => match result {
@@ -692,6 +713,22 @@ impl ExileApp {
                         }
                     }
                 },
+                Event::Profile { uuid, profile: Some(profile) } => {
+                    let current = if self.session().is_some_and(|s| s.uuid == uuid) {
+                        self.session().cloned()
+                    } else {
+                        self.others.iter().find(|o| o.uuid == uuid).cloned()
+                    };
+                    if let Some(mut session) = current {
+                        let looks_changed = session.skin_url != profile.skin_url || session.cape_url != profile.cape_url;
+                        session.apply(profile);
+                        if looks_changed {
+                            self.fetch_skin(&session);
+                        }
+                        self.update_session(session);
+                    }
+                }
+                Event::Profile { profile: None, .. } => {}
                 Event::Skin { uuid, skin } => {
                     let known = self.session().is_some_and(|s| s.uuid == uuid) || self.others.iter().any(|o| o.uuid == uuid);
                     if let Some(skin) = skin

@@ -236,6 +236,26 @@ pub fn clean_up() {
             }
         });
     }
+    #[cfg(windows)]
+    note_installed_version(&exe);
+}
+
+/// When exile-setup.exe installed this copy, keeps the version shown in
+/// Settings > Apps in step with updates.
+#[cfg(windows)]
+fn note_installed_version(exe: &Path) {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
+
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Exile";
+    let Ok(key) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(KEY, KEY_READ | KEY_SET_VALUE) else {
+        return;
+    };
+    let location: String = key.get_value("InstallLocation").unwrap_or_default();
+    let ours = exe.parent().is_some_and(|dir| dir.display().to_string().eq_ignore_ascii_case(&location));
+    if ours && key.get_value::<String, _>("DisplayVersion").ok().as_deref() != Some(CURRENT) {
+        let _ = key.set_value("DisplayVersion", &CURRENT);
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/launcher"]
+members = ["crates/launcher", "crates/ui", "crates/installer"]
 
 [profile.release]
 opt-level = 3

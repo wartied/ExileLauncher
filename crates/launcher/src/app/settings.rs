@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 
-use super::{Account, ExileApp, Page};
+use super::{Account, Event, ExileApp, Page};
 use crate::auth::Session;
+use crate::changelog::{Note, Release};
 use crate::instance::UpdateMode;
 use crate::memory::{self, fmt_mb};
 use crate::theme::{self, *};
@@ -39,6 +40,30 @@ impl Tab {
             Tab::Appearance => "Theme and size",
             Tab::Games => "Memory and running games",
             Tab::Launcher => "Updates and behaviour",
+        }
+    }
+}
+
+/// Release notes in Settings > Launcher, loaded the first time it opens.
+#[derive(Default)]
+pub struct Changelog {
+    releases: Vec<Release>,
+    requested: bool,
+    loading: bool,
+    error: Option<String>,
+    /// The release whose notes are showing.
+    open: Option<String>,
+}
+
+impl Changelog {
+    pub(super) fn finish(&mut self, result: Result<Vec<Release>, String>) {
+        self.loading = false;
+        match result {
+            Ok(releases) => {
+                self.releases = releases;
+                self.error = None;
+            }
+            Err(e) => self.error = Some(e),
         }
     }
 }
@@ -162,7 +187,8 @@ impl ExileApp {
                     ui.add_space(14.0);
                     let uuid = dashed_uuid(&session.uuid);
                     detail(ui, "UUID", &uuid, Some(&session.uuid));
-                    detail(ui, "Skin model", if session.skin_slim { "Slim (Alex)" } else { "Classic (Steve)" }, None);
+                    let slim = session.skin_slim || self.skins.get(&session.uuid).is_some_and(|s| s.slim);
+                    detail(ui, "Skin model", if slim { "Slim (Alex)" } else { "Classic (Steve)" }, None);
                     detail(ui, "Cape", session.cape.as_deref().unwrap_or("None"), None);
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
@@ -175,7 +201,7 @@ impl ExileApp {
                     });
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("Skin changes show here the next time Exile refreshes your sign-in.").size(12.0).color(text_faint()),
+                        RichText::new("Skin and cape changes show here the next time Exile starts.").size(12.0).color(text_faint()),
                     );
                 });
             });
@@ -217,8 +243,9 @@ impl ExileApp {
             &painter,
             model,
             skin.map(|s| s.full.id()),
-            session.skin_slim,
+            session.skin_slim || skin.is_some_and(|s| s.slim),
             skin.is_some_and(|s| s.legacy),
+            skin.is_some_and(|s| s.cape),
             &self.skin_view.pose(),
         );
         // A name tag, like the one over players in game.
@@ -345,8 +372,126 @@ impl ExileApp {
             }
         });
         ui.add_space(8.0);
-        ui.label(RichText::new(format!("Exile {}", crate::update::CURRENT)).size(12.0).color(text_faint()));
+        self.changelog(ui);
     }
+
+    fn load_changelog(&mut self) {
+        self.changelog.requested = true;
+        self.changelog.loading = true;
+        self.spawn(|| Event::Changelog(crate::changelog::load().map_err(|e| format!("{e:#}"))));
+    }
+
+    /// Every release, newest first. Clicking one shows its notes under it.
+    fn changelog(&mut self, ui: &mut Ui) {
+        if !self.changelog.requested {
+            // The saved copy shows straight away while the list refreshes.
+            self.changelog.releases = crate::changelog::cached().unwrap_or_default();
+            self.changelog.open = Some(crate::update::CURRENT.to_owned());
+            self.load_changelog();
+        }
+        widgets::section_label(ui, "Changelog");
+        ui.add_space(6.0);
+
+        if self.changelog.releases.is_empty() {
+            ui.horizontal(|ui| {
+                if self.changelog.loading {
+                    ui.add(egui::Spinner::new().size(14.0).color(text_dim()));
+                    ui.label(RichText::new("Loading release notes…").color(text_dim()));
+                } else {
+                    ui.label(RichText::new("Couldn't load the release notes.").color(text_dim()));
+                    if ui.link("Try again").clicked() {
+                        self.load_changelog();
+                    }
+                }
+            });
+            return;
+        }
+
+        let mut toggled = None;
+        egui::Frame::new()
+            .fill(surface())
+            .stroke(Stroke::new(1.0, border()))
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(egui::Margin::same(4))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ScrollArea::vertical().id_salt("changelog").max_height(300.0).min_scrolled_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (i, release) in self.changelog.releases.iter().enumerate() {
+                        if i > 0 {
+                            let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                            ui.painter().hline(line.x_range().shrink(10.0), line.center().y, Stroke::new(1.0, border()));
+                        }
+                        let open = self.changelog.open.as_deref() == Some(&release.version);
+                        if release_row(ui, release, open).clicked() {
+                            toggled = Some(release.version.clone());
+                        }
+                        if open {
+                            release_notes(ui, &release.notes);
+                        }
+                    }
+                });
+            });
+        if let Some(version) = toggled {
+            self.changelog.open = if self.changelog.open.as_ref() == Some(&version) { None } else { Some(version) };
+        }
+    }
+}
+
+/// A release in the changelog: version, "Installed" for the running one,
+/// its date and a chevron that points down while its notes show.
+fn release_row(ui: &mut Ui, release: &Release, open: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter().rect_filled(rect.shrink(1.0), CornerRadius::same(5), surface_hover());
+        }
+        let y = rect.center().y;
+        let font = egui::FontId::new(14.0, theme::semibold());
+        let name = format!("Exile {}", release.version);
+        let name_w = widgets::text_width(ui, &name, &font);
+        widgets::paint_text(ui, rect.left() + 12.0, Align::Min, y, &name, font, text());
+        if release.version == crate::update::CURRENT {
+            let small = egui::FontId::proportional(11.0);
+            let w = widgets::text_width(ui, "Installed", &small) + 12.0;
+            let pill = egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0 + name_w + 10.0, y - 9.0), vec2(w, 18.0));
+            ui.painter().rect_filled(pill, CornerRadius::same(9), ACCENT_DIM);
+            widgets::paint_text(ui, pill.center().x, Align::Center, y, "Installed", small, ACCENT_LIGHT);
+        }
+
+        // Chevron: right when closed, down when open.
+        let c = egui::pos2(rect.right() - 18.0, y);
+        let stroke = Stroke::new(1.5, if response.hovered() { text_dim() } else { text_faint() });
+        let points = if open {
+            [c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)]
+        } else {
+            [c + vec2(-2.0, -4.0), c + vec2(2.0, 0.0), c + vec2(-2.0, 4.0)]
+        };
+        ui.painter().line(points.to_vec(), stroke);
+        widgets::paint_text(ui, rect.right() - 34.0, Align::Max, y, &release.date, egui::FontId::proportional(12.0), text_faint());
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn release_notes(ui: &mut Ui, notes: &[Note]) {
+    egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 16, top: 0, bottom: 12 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for note in notes {
+            match note {
+                Note::Bullet(line) => {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(RichText::new("•").color(text_faint()));
+                        ui.add(egui::Label::new(RichText::new(line).color(text_dim())).wrap());
+                    });
+                }
+                Note::Text(line) => {
+                    ui.add(egui::Label::new(RichText::new(line).color(text_dim())).wrap());
+                }
+            }
+        }
+    });
 }
 
 /// A setting: title and explanation on the left, its control on the right.

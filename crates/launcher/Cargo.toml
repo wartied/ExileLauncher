@@ -1,6 +1,6 @@
 [package]
 name = "exile-launcher"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Exile Launcher - a fast, native Minecraft launcher"
 license = "GPL-3.0-only"
@@ -15,6 +15,7 @@ anyhow = "1"
 base64 = "0.23"
 directories = "6"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+exile-ui = { path = "../ui" }
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 getrandom = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -28,5 +29,10 @@ toml = "1"
 ureq = { version = "3", features = ["json"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+[target."cfg(windows)".build-dependencies]
+png = "0.18"
+winresource = "0.1"
+
 [target."cfg(windows)".dependencies]
+winreg = "0.56"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

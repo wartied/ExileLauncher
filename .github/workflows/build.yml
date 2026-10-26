@@ -1,5 +1,6 @@
 # Builds Exile Client and the launcher (with the client bundled) for Windows
-# and Linux, and runs the launcher's tests. Used by ci.yml and release.yml.
+# and Linux, plus the Windows installer, and runs the tests. Used by ci.yml
+# and release.yml.
 name: Build
 
 on:
@@ -53,8 +54,14 @@ jobs:
         run: cargo test --release --locked
       - name: Build
         run: cargo build --release --locked -p exile-launcher
+      # The bare installer; release.yml packs exile.exe into it.
+      - name: Build the installer
+        if: matrix.platform == 'windows-x86_64'
+        run: cargo build --release --locked -p exile-installer
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-${{ matrix.platform }}
-          path: target/release/${{ matrix.binary }}
+          path: |
+            target/release/${{ matrix.binary }}
+            target/release/exile-setup.exe
           if-no-files-found: error

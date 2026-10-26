@@ -3,12 +3,32 @@
 //! Build the client first (`client/gradlew build`); this script then embeds
 //! `client/build/libs/exile-client-<version>.jar` and sets `cfg(exile_client)`.
 //! Without it the launcher still builds, just without the client.
+//!
+//! On Windows it also gives exile.exe its icon and file details.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+#[path = "../ui/src/icon.rs"]
+mod icon;
+#[cfg(windows)]
+#[path = "../ui/build/resources.rs"]
+mod resources;
+
 fn main() {
+    bundle_client();
+    #[cfg(windows)]
+    {
+        println!("cargo::rerun-if-changed=../ui/src/icon.rs");
+        let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+        let details = resources::Details { description: "Exile", version: env!("CARGO_PKG_VERSION"), manifest: None };
+        resources::embed(&out, details, false);
+    }
+}
+
+fn bundle_client() {
     println!("cargo::rustc-check-cfg=cfg(exile_client)");
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let client = manifest.join("../../client");

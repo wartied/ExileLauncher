@@ -5,8 +5,8 @@
 #   3. git push origin v0.2.0
 #
 # The tag message becomes the release notes shown in the launcher. The
-# release gets the launcher for Windows and Linux, the standalone client jar
-# and a signed update.json; exiles.dev/update.json points at the newest one,
+# release gets the Windows installer, the launcher for Windows and Linux, the
+# standalone client jar and a signed update.json; exiles.dev/update.json points at the newest one,
 # which is how installed launchers find it.
 name: Release
 
@@ -53,6 +53,8 @@ jobs:
           mkdir dist
           # Plain names: these are what people's browsers save.
           cp artifacts/launcher-windows-x86_64/exile.exe dist/exile.exe
+          # The installer with exile.exe inside (see crates/installer/src/payload.rs).
+          python3 .github/scripts/pack_installer.py artifacts/launcher-windows-x86_64/exile-setup.exe dist/exile.exe dist/exile-setup.exe
           cp artifacts/launcher-linux-x86_64/exile dist/exile
           chmod +x dist/exile
           # For people on Linux: a tarball keeps the executable bit. The launcher updates from the bare binary.
