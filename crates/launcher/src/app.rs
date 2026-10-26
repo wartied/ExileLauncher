@@ -187,6 +187,8 @@ pub struct ExileApp {
     client_setup: HashSet<String>,
     update: updates::UpdateState,
     last_update_check: Option<Instant>,
+    /// When a background sign-in renewal was last tried (offline: every 5 minutes).
+    last_refresh_try: Option<Instant>,
     changelog: settings::Changelog,
 }
 
@@ -233,6 +235,7 @@ impl ExileApp {
             client_setup: HashSet::new(),
             update: updates::UpdateState::Idle,
             last_update_check: None,
+            last_refresh_try: None,
             changelog: Default::default(),
         };
         if let Some(id) = app.selected.clone() {
@@ -567,6 +570,9 @@ impl ExileApp {
     /// starts the game afterwards.
     fn start_task(&mut self, id: &str, launch_heap: Option<u64>) {
         let Some(inst) = self.instances.iter().find(|i| i.id == id).cloned() else { return };
+        if launch_heap.is_some() {
+            self.games.stop_aot_build(id);
+        }
         let progress = Arc::new(Progress::default());
         self.tasks.insert(id.to_owned(), Task { progress: progress.clone(), launch_heap });
         self.errors.remove(id);
@@ -581,6 +587,8 @@ impl ExileApp {
             let mut sign_out = false;
             let outcome = (|| -> anyhow::Result<TaskOutcome> {
                 // Launching requires a valid, license-checked session.
+                let mut steps = Vec::new();
+                let step = Instant::now();
                 let auth = match launch_heap {
                     Some(_) => {
                         let mut s = session.ok_or_else(|| anyhow::anyhow!("Sign in to play."))?;
@@ -603,6 +611,8 @@ impl ExileApp {
                     None => None,
                 };
 
+                steps.push(("signing in", step.elapsed()));
+                let step = Instant::now();
                 progress.set_stage("Checking files");
                 if launch_heap.is_none() || !install::is_complete(&inst.version, inst.loader.as_ref()) {
                     let entry = match entry {
@@ -614,6 +624,7 @@ impl ExileApp {
                     };
                     install::install(&entry, inst.loader.as_ref(), &progress)?;
                 }
+                steps.push(("checking files", step.elapsed()));
 
                 match (launch_heap, auth) {
                     (Some(heap_mb), Some(auth)) => {
@@ -624,7 +635,7 @@ impl ExileApp {
                         } else {
                             crate::client::remove(&inst.mods_dir());
                         }
-                        let child = launch::spawn(&inst, heap_mb, &auth)?;
+                        let child = launch::spawn(&inst, heap_mb, &auth, &steps)?;
                         Ok(TaskOutcome::Launched { child, heap_mb })
                     }
                     _ => Ok(TaskOutcome::Installed),
@@ -788,6 +799,13 @@ impl ExileApp {
                 }
                 self.last_exit.insert(exited.instance_id.clone(), exited);
             }
+        }
+        // Renew the sign-in before it runs out, so Play never has to.
+        if self.last_refresh_try.is_none_or(|t| t.elapsed() >= Duration::from_secs(300))
+            && self.session().is_some_and(Session::expires_soon)
+        {
+            self.last_refresh_try = Some(Instant::now());
+            self.refresh_session();
         }
         if self.last_probe.elapsed() >= Duration::from_secs(2) {
             self.last_probe = Instant::now();

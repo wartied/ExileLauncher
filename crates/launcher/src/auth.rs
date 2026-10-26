@@ -121,6 +121,12 @@ impl Session {
     pub fn needs_refresh(&self) -> bool {
         now() + 600 >= self.expires_at
     }
+
+    /// True when the token expires within the hour: early enough to renew it
+    /// in the background, so pressing Play doesn't wait on Microsoft.
+    pub fn expires_soon(&self) -> bool {
+        now() + 3600 >= self.expires_at
+    }
 }
 
 fn now() -> u64 {

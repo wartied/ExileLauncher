@@ -6,7 +6,7 @@ use std::fs::{self, File};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -214,16 +214,26 @@ pub fn build_args(inst: &Instance, v: &VersionJson, heap_mb: u64, auth: &LaunchA
 }
 
 /// Prepares the instance folder and starts the game.
-pub fn spawn(inst: &Instance, heap_mb: u64, auth: &LaunchAuth) -> Result<Child> {
+/// Starts the game. `steps` are the launcher's own steps before this one and
+/// how long they took; they go in the log with the time spent here, so a
+/// slow start shows where the time went.
+pub fn spawn(inst: &Instance, heap_mb: u64, auth: &LaunchAuth, steps: &[(&str, Duration)]) -> Result<Child> {
+    let started = Instant::now();
     let (java, args) = prepare(inst, heap_mb, auth)?;
     let mut log = File::create(inst.output_log())?;
+    let mut steps = steps.to_vec();
+    steps.push(("preparing", started.elapsed()));
+    let total: Duration = steps.iter().map(|(_, d)| *d).sum();
+    let detail: Vec<String> = steps.iter().map(|(name, d)| format!("{name} {:.1} s", d.as_secs_f32())).collect();
     writeln!(
         log,
-        "[Exile] Starting {} ({}) with {} heap\n[Exile] Java: {}\n",
+        "[Exile] Starting {} ({}) with {} heap\n[Exile] Java: {}\n[Exile] Launcher ready in {:.1} s ({})\n",
         inst.version,
         inst.name,
         memory::fmt_mb(heap_mb),
-        java.display()
+        java.display(),
+        total.as_secs_f32(),
+        detail.join(", ")
     )?;
     let mut cmd = Command::new(&java);
     cmd.args(&args)
@@ -339,6 +349,21 @@ impl Games {
 
     pub fn get(&self, instance_id: &str) -> Option<&RunningGame> {
         self.running.iter().find(|g| g.instance_id == instance_id)
+    }
+
+    /// Stops this instance's cache build, if one is running, so the game
+    /// starting now gets the CPU and disk to itself. The recording stays, so
+    /// the build runs again after this game exits.
+    pub fn stop_aot_build(&mut self, instance_id: &str) {
+        self.builds.retain_mut(|b| {
+            if b.instance_id != instance_id {
+                return true;
+            }
+            let _ = b.child.kill();
+            let _ = b.child.wait();
+            let _ = fs::remove_file(b.dir.join("game.aot.tmp"));
+            false
+        });
     }
 
     pub fn total_footprint_mb(&self) -> u64 {
@@ -613,7 +638,7 @@ mod tests {
         if inst.client {
             crate::client::install(&inst.mods_dir()).unwrap();
         }
-        let mut child = spawn(&inst, 2048, &smoke_auth()).expect("spawn");
+        let mut child = spawn(&inst, 2048, &smoke_auth(), &[]).expect("spawn");
         std::thread::sleep(std::time::Duration::from_secs(25));
         let status = child.try_wait().unwrap();
         let _ = child.kill();

@@ -72,6 +72,7 @@ pub fn launch_flags(inst: &Instance, java: &Path, java_major: u32, jvm_args: &[S
     let key = key(java, jvm_args);
     let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
     if fs::read_to_string(dir.join(KEY)).is_ok_and(|k| k == key) {
+        adopt_finished_build(&dir);
         if dir.join(CACHE).is_file() {
             return vec![format!("-XX:AOTCache={}", path(CACHE))];
         }
@@ -133,6 +134,18 @@ pub fn start_create(inst: &Instance, java: &Path, jvm_args: &[String]) -> Result
     cmd.spawn().with_context(|| format!("starting {}", java.display()))
 }
 
+/// A build keeps running if the launcher closes, and then nothing moves its
+/// result into place. The JVM prints this line only once the file is whole.
+fn adopt_finished_build(dir: &Path) {
+    let tmp = dir.join(format!("{CACHE}.tmp"));
+    if !dir.join(CACHE).exists()
+        && tmp.is_file()
+        && fs::read_to_string(dir.join("create.log")).is_ok_and(|log| log.contains("AOTCache creation is complete"))
+    {
+        finish_create(dir, true);
+    }
+}
+
 /// Called when the background build exits.
 pub fn finish_create(dir: &Path, ok: bool) {
     let tmp = dir.join(format!("{CACHE}.tmp"));
@@ -148,6 +161,26 @@ pub fn finish_create(dir: &Path, ok: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finished_build_is_adopted_once_complete() {
+        let dir = std::env::temp_dir().join(format!("exile-aot-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(RECORDING), "rec").unwrap();
+        fs::write(dir.join(format!("{CACHE}.tmp")), "cache").unwrap();
+
+        // Still being written: left alone.
+        fs::write(dir.join("create.log"), "Reading AOTConfiguration ...").unwrap();
+        adopt_finished_build(&dir);
+        assert!(!dir.join(CACHE).exists());
+
+        fs::write(dir.join("create.log"), "Reading ...\nAOTCache creation is complete: game.aot.tmp 5 bytes").unwrap();
+        adopt_finished_build(&dir);
+        assert_eq!(fs::read_to_string(dir.join(CACHE)).unwrap(), "cache");
+        assert!(!dir.join(RECORDING).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn key_follows_the_command_line() {
