@@ -11,7 +11,7 @@ Exile has two parts that work together but live separately:
 
 ## Launcher
 
-- **Native and light.** No web view and no Electron. The UI is drawn with egui, uses no CPU while idle, and ships as one ~9 MB executable.
+- **Native and light.** No web view and no Electron. The UI is drawn with egui, uses no CPU while idle, and ships as one ~10 MB executable.
 - **Safe memory handling.** Memory limits depend on the version and on how many mods it has, Windows always keeps a reserve, and a game won't start if everything running wouldn't fit in your RAM.
 - **Mods.** One-click Fabric setup, then search and install mods from Modrinth (and CurseForge, with an API key). Dependencies install automatically, and conflicts, missing dependencies and hardware limits are flagged.
 - **Microsoft sign-in.** Players sign in through Microsoft's own login page, and Exile checks the account owns Minecraft before the game can start.
