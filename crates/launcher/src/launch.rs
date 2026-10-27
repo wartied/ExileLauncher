@@ -71,7 +71,7 @@ fn classpath(v: &VersionJson) -> Result<String> {
             entries.push(path);
         }
     }
-    entries.push(paths::version_jar(&v.id));
+    entries.push(crate::game_jar::for_launch(&v.id));
     let parts: Vec<String> = entries.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     Ok(parts.join(CLASSPATH_SEPARATOR))
 }
@@ -272,6 +272,8 @@ fn jvm_part<'a>(args: &'a [String], v: &VersionJson) -> &'a [String] {
 /// Gets the instance folder ready and returns the Java executable and its arguments.
 fn prepare(inst: &Instance, heap_mb: u64, auth: &LaunchAuth) -> Result<(PathBuf, Vec<String>)> {
     let (v, java) = resolve(inst)?;
+    // Not fatal: without the copy the game still starts, just slower.
+    let _ = crate::game_jar::prepare(&v.id);
     fs::create_dir_all(inst.game_dir())?;
     extract_natives(&v, &inst.natives_dir()).context("extracting native libraries")?;
     let index = install::asset_index_for(&v)?;

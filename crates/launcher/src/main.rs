@@ -5,6 +5,7 @@ mod app;
 mod auth;
 mod changelog;
 mod client;
+mod game_jar;
 mod install;
 mod instance;
 mod java;
