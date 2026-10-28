@@ -85,8 +85,10 @@ enum BadgeState {
     Idle,
     Loading,
     Ready(Mine),
-    /// Couldn't sign in to the badge service; shown badges still come from the lookup.
-    Failed,
+    /// The Minecraft token is being renewed; badges load once it is.
+    WaitingForSignIn,
+    /// Couldn't sign in to the badge service (why); shown badges still come from the lookup.
+    Failed(String),
 }
 
 const UI_SCALES: [(&str, f32); 5] = [("90%", 0.9), ("100%", 1.0), ("110%", 1.1), ("125%", 1.25), ("150%", 1.5)];
@@ -305,17 +307,21 @@ impl ExileApp {
 
     /// Badges in the profile: each one a button that shows or hides it.
     fn badge_row(&mut self, ui: &mut Ui, session: &Session) {
-        if self.my_badges.uuid != session.uuid || matches!(self.my_badges.state, BadgeState::Idle) {
+        let renewed = matches!(self.my_badges.state, BadgeState::WaitingForSignIn) && !session.needs_refresh();
+        if self.my_badges.uuid != session.uuid || matches!(self.my_badges.state, BadgeState::Idle) || renewed {
             self.load_my_badges(session);
         }
         ui.add_space(4.0);
         ui.horizontal_top(|ui| {
             ui.add_sized(vec2(90.0, 28.0), egui::Label::new(RichText::new("Badges").color(text_faint())));
             ui.vertical(|ui| {
+                let one_line = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)| {
+                    ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), Layout::left_to_right(Align::Center), |ui| add(ui));
+                };
                 let (all, hidden, editable) = match &self.my_badges.state {
                     BadgeState::Ready(mine) => (mine.badges.clone(), mine.hidden.clone(), !self.my_badges.saving),
-                    BadgeState::Loading => {
-                        ui.horizontal(|ui| {
+                    BadgeState::Loading | BadgeState::WaitingForSignIn => {
+                        one_line(ui, &mut |ui| {
                             ui.add(egui::Spinner::new().size(14.0).color(text_dim()));
                             ui.label(RichText::new("Loading").color(text_dim()));
                         });
@@ -323,29 +329,36 @@ impl ExileApp {
                     }
                     _ => (self.shown_badges.get(&session.uuid).cloned().unwrap_or_default(), Vec::new(), false),
                 };
-                if all.is_empty() {
-                    ui.add_sized(vec2(0.0, 28.0), egui::Label::new(RichText::new("None yet").color(text())));
-                    return;
-                }
                 let mut toggled = None;
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                    for id in &all {
-                        let shown = !hidden.contains(id);
-                        if self.badge_chip(ui, id, shown, editable).clicked() {
-                            toggled = Some(id.clone());
+                if all.is_empty() {
+                    one_line(ui, &mut |ui| {
+                        ui.label(RichText::new("None yet").color(text()));
+                    });
+                } else {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                        for id in &all {
+                            let shown = !hidden.contains(id);
+                            if self.badge_chip(ui, id, shown, editable).clicked() {
+                                toggled = Some(id.clone());
+                            }
                         }
+                    });
+                }
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                if let BadgeState::Failed(reason) = &self.my_badges.state {
+                    let reason = reason.clone();
+                    ui.label(RichText::new(format!("Couldn't sign in to exiles.dev: {reason}")).size(12.0).color(text_faint()));
+                    if ui.link(RichText::new("Try again").size(12.0)).clicked() {
+                        self.load_my_badges(session);
                     }
-                });
-                let note = match (&self.my_badges.error, editable) {
-                    (Some(e), _) => RichText::new(e).size(12.0).color(DANGER),
-                    (None, true) => RichText::new("Click a badge to show or hide it next to your name in game.").size(12.0).color(text_faint()),
-                    (None, false) if matches!(self.my_badges.state, BadgeState::Failed) => {
-                        RichText::new("Couldn't sign in to exiles.dev to change these right now.").size(12.0).color(text_faint())
-                    }
-                    (None, false) => RichText::new("Saving").size(12.0).color(text_faint()),
-                };
-                ui.label(note);
+                } else if let Some(e) = &self.my_badges.error {
+                    ui.label(RichText::new(e).size(12.0).color(DANGER));
+                } else if self.my_badges.saving {
+                    ui.label(RichText::new("Saving").size(12.0).color(text_faint()));
+                } else if editable && !all.is_empty() {
+                    ui.label(RichText::new("Click a badge to show or hide it next to your name in game.").size(12.0).color(text_faint()));
+                }
                 if let Some(id) = toggled {
                     self.toggle_badge(&id);
                 }
@@ -386,7 +399,7 @@ impl ExileApp {
         // An expired token can't sign in to the badge service; the background
         // renewal fixes it within a minute, and the lookup covers until then.
         if session.needs_refresh() {
-            self.my_badges.state = BadgeState::Failed;
+            self.my_badges.state = BadgeState::WaitingForSignIn;
             return;
         }
         self.my_badges.state = BadgeState::Loading;
@@ -421,7 +434,7 @@ impl ExileApp {
                 self.shown_badges.insert(uuid, mine.shown());
                 BadgeState::Ready(mine)
             }
-            Err(_) => BadgeState::Failed,
+            Err(reason) => BadgeState::Failed(reason),
         };
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "exile-launcher"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 description = "Exile Launcher - a fast, native Minecraft launcher"
 license = "GPL-3.0-only"
@@ -20,6 +20,11 @@ eframe = { version = "0.37", default-features = false, features = ["glow", "defa
 getrandom = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 open = "5"
+# Signs the badge service's one-time id with the account's chat key (badges.rs).
+# RUSTSEC-2023-0071 (a timing side channel) needs many timed private-key
+# operations over a network; Exile signs once per sign-in, locally, with a key
+# Mojang replaces every few days.
+rsa = { version = "0.9", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.11"

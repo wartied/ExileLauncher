@@ -48,8 +48,9 @@ launcher. Details in [client/README.md](client/README.md).
 - **No tracking.** Exile has no analytics or telemetry. It connects to Microsoft, Xbox and Mojang
   (sign-in, game files, skins), Fabric (the mod loader), Modrinth (mods), GitHub (release notes)
   and exiles.dev (updates and badges), and only when a feature needs them.
-- **Badges.** To show badges, Exile Client signs in to exiles.dev once per game. Mojang confirms who
-  you are, the way it does for servers; your Minecraft login is never sent to exiles.dev. It keeps your
+- **Badges.** To show badges, Exile signs in to exiles.dev (once per game, and from the launcher's
+  Account settings). It proves who you are with what Mojang has already signed: your account's chat
+  key and your profile. Your Minecraft login and private key are never sent to exiles.dev. It keeps your
   Minecraft UUID and name, when you first and last used Exile (which decides Early supporter), and
   which badges you've hidden. To show other players' badges, the client asks exiles.dev about the
   players it sees. Turning Badges off in the Exile menu (Features) stops both.
