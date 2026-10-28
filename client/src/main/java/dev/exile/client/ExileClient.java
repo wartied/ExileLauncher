@@ -1,5 +1,6 @@
 package dev.exile.client;
 
+import dev.exile.client.badges.Badges;
 import dev.exile.client.bench.ExileBench;
 import dev.exile.client.feature.Armour;
 import dev.exile.client.feature.Keybinds;
@@ -55,6 +56,7 @@ public final class ExileClient implements ClientModInitializer {
 			Keybinds.tick(client);
 			ExileHud.tick(client);
 			Governor.tick(client);
+			Badges.tick(client);
 		});
 		LOG.info("Exile Client loaded");
 	}

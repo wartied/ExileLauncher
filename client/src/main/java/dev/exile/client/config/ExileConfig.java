@@ -90,6 +90,11 @@ public final class ExileConfig {
 		public boolean fullbright = false;
 		/** Vanilla menus: "vanilla", "dark" or "exile". */
 		public String menuTheme = "vanilla";
+
+		/** Your own name tag above your head in third person. */
+		public boolean ownNameTag = false;
+		/** Exile badges next to player names (looked up on exiles.dev). */
+		public boolean badges = true;
 	}
 
 	public static final class Performance {

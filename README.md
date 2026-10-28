@@ -14,7 +14,7 @@ A fast, native Minecraft: Java Edition launcher, and a performance client to go 
 - **Mods.** One-click Fabric setup, then search and install mods from Modrinth, with dependencies
   handled for you.
 - **Accounts.** Microsoft sign-in, several accounts with a quick switcher, and a 3D view of your
-  skin and cape.
+  skin, cape and badges.
 - **Stays current.** Signed updates for the launcher and client together, and a changelog in
   Settings.
 
@@ -27,8 +27,10 @@ launcher. Details in [client/README.md](client/README.md).
 - **Frame Budget.** Shows where each frame's time goes, and can hold a target frame rate.
 - **Exile Bench.** A repeatable benchmark with average FPS, 1% and 0.1% lows.
 - **HUD.** FPS, coordinates, armour, saturation, effects, keystrokes and CPS, laid out by dragging.
+- **Badges.** Exile, Developer, OG name and Early supporter badges next to player names, on name
+  tags and in the player list. You choose which of yours show, in the launcher.
 - **Quality of life.** Zoom, free look, toggle sprint and sneak, fullbright, clear water and lava,
-  lower fire and shield, slim or invisible armour, and menu themes.
+  lower fire and shield, slim or invisible armour, your own name tag in third person, and menu themes.
 
 ## Built with
 
@@ -45,7 +47,12 @@ launcher. Details in [client/README.md](client/README.md).
   sent only to Microsoft, Xbox and Mojang to sign you in.
 - **No tracking.** Exile has no analytics or telemetry. It connects to Microsoft, Xbox and Mojang
   (sign-in, game files, skins), Fabric (the mod loader), Modrinth (mods), GitHub (release notes)
-  and exiles.dev (updates), and only when a feature needs them.
+  and exiles.dev (updates and badges), and only when a feature needs them.
+- **Badges.** To show badges, Exile Client signs in to exiles.dev once per game. Mojang confirms who
+  you are, the way it does for servers; your Minecraft login is never sent to exiles.dev. It keeps your
+  Minecraft UUID and name, when you first and last used Exile (which decides Early supporter), and
+  which badges you've hidden. To show other players' badges, the client asks exiles.dev about the
+  players it sees. Turning Badges off in the Exile menu (Features) stops both.
 - **Game files.** Minecraft is downloaded from Mojang's servers and checked against Mojang's
   checksums. Exile doesn't redistribute any of it. To start faster, it runs the game from a local
   copy of the game jar without Mojang's signature; the downloaded original is kept unchanged.

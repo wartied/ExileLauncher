@@ -1,0 +1,8 @@
+{
+  "providers": [
+    { "type": "bitmap", "file": "exile:font/badge/exile.png", "ascent": 7, "height": 8, "chars": [""] },
+    { "type": "bitmap", "file": "exile:font/badge/dev.png", "ascent": 7, "height": 8, "chars": [""] },
+    { "type": "bitmap", "file": "exile:font/badge/ogu.png", "ascent": 7, "height": 8, "chars": [""] },
+    { "type": "bitmap", "file": "exile:font/badge/early_supporter.png", "ascent": 7, "height": 8, "chars": [""] }
+  ]
+}

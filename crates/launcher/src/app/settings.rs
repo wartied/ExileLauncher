@@ -7,6 +7,7 @@ use std::time::Duration;
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 
 use super::{Account, Event, ExileApp, Page};
+use crate::badges::{self, Mine};
 use crate::auth::Session;
 use crate::changelog::{Note, Release};
 use crate::instance::UpdateMode;
@@ -68,7 +69,29 @@ impl Changelog {
     }
 }
 
+/// The active account's own badges: all of them, and which are hidden.
+/// Loaded when the Account tab opens (it needs a badge session).
+#[derive(Default)]
+pub struct MyBadges {
+    uuid: String,
+    state: BadgeState,
+    saving: bool,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+enum BadgeState {
+    #[default]
+    Idle,
+    Loading,
+    Ready(Mine),
+    /// Couldn't sign in to the badge service; shown badges still come from the lookup.
+    Failed,
+}
+
 const UI_SCALES: [(&str, f32); 5] = [("90%", 0.9), ("100%", 1.0), ("110%", 1.1), ("125%", 1.25), ("150%", 1.5)];
+/// Badge size in the launcher: their 16 pixels, drawn one to one.
+const BADGE: f32 = 16.0;
 const RUNNING_LIMITS: [(&str, Option<u32>); 5] = [("1", Some(1)), ("2", Some(2)), ("3", Some(3)), ("4", Some(4)), ("Any", None)];
 
 impl ExileApp {
@@ -190,6 +213,7 @@ impl ExileApp {
                     let slim = session.skin_slim || self.skins.get(&session.uuid).is_some_and(|s| s.slim);
                     detail(ui, "Skin model", if slim { "Slim (Alex)" } else { "Classic (Steve)" }, None);
                     detail(ui, "Cape", session.cape.as_deref().unwrap_or("None"), None);
+                    self.badge_row(ui, &session);
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         if widgets::button(ui, "Change skin").clicked() {
@@ -248,14 +272,174 @@ impl ExileApp {
             skin.is_some_and(|s| s.cape),
             &self.skin_view.pose(),
         );
-        // A name tag, like the one over players in game.
+        // A name tag, like the one over players in game, badges and all.
         let font = egui::FontId::new(13.0, theme::semibold());
         let galley = painter.layout_no_wrap(session.name.clone(), font, Color32::WHITE);
-        let tag = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 26.0), galley.size() + vec2(12.0, 6.0));
+        let icons: Vec<egui::TextureId> = self.shown_badges_of(&session.uuid).iter().filter_map(|id| self.badge_icon(id)).collect();
+        let badges_w = if icons.is_empty() { 0.0 } else { 5.0 + icons.len() as f32 * BADGE + (icons.len() - 1) as f32 * 3.0 };
+        let size = vec2(galley.size().x + badges_w, galley.size().y.max(BADGE)) + vec2(12.0, 6.0);
+        let tag = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 26.0), size);
         painter.rect_filled(tag, CornerRadius::same(3), Color32::from_black_alpha(110));
-        painter.galley(tag.min + vec2(6.0, 3.0), galley, Color32::WHITE);
+        let text_y = tag.center().y - galley.size().y / 2.0;
+        let mut x = tag.min.x + 6.0 + galley.size().x + 5.0;
+        painter.galley(egui::pos2(tag.min.x + 6.0, text_y), galley, Color32::WHITE);
+        for icon in icons {
+            let at = egui::Rect::from_min_size(egui::pos2(x, tag.center().y - BADGE / 2.0), vec2(BADGE, BADGE));
+            painter.image(icon, at, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            x += BADGE + 3.0;
+        }
         if self.skin_view.animating() {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+    }
+
+    /// The badges shown next to this account's name: from its own badge
+    /// session when there is one (so a change shows at once), otherwise from
+    /// the lookup.
+    fn shown_badges_of(&self, uuid: &str) -> Vec<String> {
+        match &self.my_badges.state {
+            BadgeState::Ready(mine) if self.my_badges.uuid == uuid => mine.shown(),
+            _ => self.shown_badges.get(uuid).cloned().unwrap_or_default(),
+        }
+    }
+
+    /// Badges in the profile: each one a button that shows or hides it.
+    fn badge_row(&mut self, ui: &mut Ui, session: &Session) {
+        if self.my_badges.uuid != session.uuid || matches!(self.my_badges.state, BadgeState::Idle) {
+            self.load_my_badges(session);
+        }
+        ui.add_space(4.0);
+        ui.horizontal_top(|ui| {
+            ui.add_sized(vec2(90.0, 28.0), egui::Label::new(RichText::new("Badges").color(text_faint())));
+            ui.vertical(|ui| {
+                let (all, hidden, editable) = match &self.my_badges.state {
+                    BadgeState::Ready(mine) => (mine.badges.clone(), mine.hidden.clone(), !self.my_badges.saving),
+                    BadgeState::Loading => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new().size(14.0).color(text_dim()));
+                            ui.label(RichText::new("Loading").color(text_dim()));
+                        });
+                        return;
+                    }
+                    _ => (self.shown_badges.get(&session.uuid).cloned().unwrap_or_default(), Vec::new(), false),
+                };
+                if all.is_empty() {
+                    ui.add_sized(vec2(0.0, 28.0), egui::Label::new(RichText::new("None yet").color(text())));
+                    return;
+                }
+                let mut toggled = None;
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                    for id in &all {
+                        let shown = !hidden.contains(id);
+                        if self.badge_chip(ui, id, shown, editable).clicked() {
+                            toggled = Some(id.clone());
+                        }
+                    }
+                });
+                let note = match (&self.my_badges.error, editable) {
+                    (Some(e), _) => RichText::new(e).size(12.0).color(DANGER),
+                    (None, true) => RichText::new("Click a badge to show or hide it next to your name in game.").size(12.0).color(text_faint()),
+                    (None, false) if matches!(self.my_badges.state, BadgeState::Failed) => {
+                        RichText::new("Couldn't sign in to exiles.dev to change these right now.").size(12.0).color(text_faint())
+                    }
+                    (None, false) => RichText::new("Saving").size(12.0).color(text_faint()),
+                };
+                ui.label(note);
+                if let Some(id) = toggled {
+                    self.toggle_badge(&id);
+                }
+            });
+        });
+    }
+
+    fn badge_chip(&mut self, ui: &mut Ui, id: &str, shown: bool, editable: bool) -> egui::Response {
+        let Some(badge) = badges::find(id) else { return ui.label("") };
+        let font = egui::FontId::proportional(13.0);
+        let text_w = widgets::text_width(ui, badge.title, &font);
+        let sense = if editable { Sense::click() } else { Sense::hover() };
+        let (rect, response) = ui.allocate_exact_size(vec2(8.0 + BADGE + 7.0 + text_w + 10.0, 28.0), sense);
+        let hovered = response.hovered() && editable;
+        let fill = if hovered { surface_hover() } else if shown { surface_active() } else { surface() };
+        let stroke = if shown { Stroke::new(1.0, border_strong()) } else { Stroke::new(1.0, border()) };
+        ui.painter().rect(rect.shrink(0.5), CornerRadius::same(RADIUS), fill, stroke, egui::StrokeKind::Inside);
+        if let Some(icon) = self.badge_icon(id) {
+            let at = egui::Rect::from_min_size(egui::pos2(rect.left() + 8.0, rect.center().y - BADGE / 2.0), vec2(BADGE, BADGE));
+            let tint = if shown { Color32::WHITE } else { Color32::from_white_alpha(80) };
+            ui.painter().image(icon, at, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
+        }
+        let colour = if shown { text() } else { text_faint() };
+        widgets::paint_text(ui, rect.left() + 8.0 + BADGE + 7.0, Align::Min, rect.center().y, badge.title, font, colour);
+        let hint = match (editable, shown) {
+            (false, _) => badge.about.to_owned(),
+            (true, true) => format!("{}. Shown next to your name; click to hide.", badge.about),
+            (true, false) => format!("{}. Hidden; click to show it next to your name.", badge.about),
+        };
+        let response = response.on_hover_text(hint);
+        if editable { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
+    }
+
+    fn load_my_badges(&mut self, session: &Session) {
+        // A failed save asks again; keep its message on screen.
+        let error = if self.my_badges.uuid == session.uuid { self.my_badges.error.take() } else { None };
+        self.my_badges = MyBadges { uuid: session.uuid.clone(), error, ..Default::default() };
+        // An expired token can't sign in to the badge service; the background
+        // renewal fixes it within a minute, and the lookup covers until then.
+        if session.needs_refresh() {
+            self.my_badges.state = BadgeState::Failed;
+            return;
+        }
+        self.my_badges.state = BadgeState::Loading;
+        let (uuid, session) = (session.uuid.clone(), session.clone());
+        self.spawn(move || Event::MyBadges { uuid, result: badges::sign_in(&session).map_err(|e| format!("{e:#}")) });
+    }
+
+    fn toggle_badge(&mut self, id: &str) {
+        let BadgeState::Ready(mine) = &mut self.my_badges.state else { return };
+        let before = mine.clone();
+        if let Some(pos) = mine.hidden.iter().position(|h| h == id) {
+            mine.hidden.remove(pos);
+        } else {
+            mine.hidden.push(id.to_owned());
+        }
+        let hidden = mine.hidden.clone();
+        self.my_badges.saving = true;
+        self.my_badges.error = None;
+        let uuid = self.my_badges.uuid.clone();
+        self.spawn(move || Event::BadgesSaved {
+            uuid,
+            result: badges::set_hidden(&before, &hidden).map_err(|_| "Couldn't save that. Try again in a moment.".to_owned()),
+        });
+    }
+
+    pub(super) fn my_badges_loaded(&mut self, uuid: String, result: Result<Mine, String>) {
+        if self.my_badges.uuid != uuid {
+            return;
+        }
+        self.my_badges.state = match result {
+            Ok(mine) => {
+                self.shown_badges.insert(uuid, mine.shown());
+                BadgeState::Ready(mine)
+            }
+            Err(_) => BadgeState::Failed,
+        };
+    }
+
+    pub(super) fn my_badges_saved(&mut self, uuid: String, result: Result<Mine, String>) {
+        if self.my_badges.uuid != uuid {
+            return;
+        }
+        self.my_badges.saving = false;
+        match result {
+            Ok(mine) => {
+                self.shown_badges.insert(uuid, mine.shown());
+                self.my_badges.state = BadgeState::Ready(mine);
+            }
+            // Ask again, so what's on screen matches what's saved.
+            Err(e) => {
+                self.my_badges.error = Some(e);
+                self.my_badges.state = BadgeState::Idle;
+            }
         }
     }
 

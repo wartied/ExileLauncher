@@ -282,6 +282,14 @@ public final class ExileMenuScreen extends Screen {
 		y += 30;
 
 		y += 6;
+		ui.section("Players", x + 8, y + 4);
+		y += 12;
+		f.ownNameTag = ui.toggleRow(x, y, w, "Your name tag", "Show your name above your head in third person", f.ownNameTag, true);
+		y += 30;
+		f.badges = ui.toggleRow(x, y, w, "Badges", "Exile badges next to player names, from exiles.dev", f.badges, true);
+		y += 30;
+
+		y += 6;
 		ui.section("Armour", x + 8, y + 4);
 		y += 12;
 		f.slimArmour = ui.toggleRow(x, y, w, "Slim armour", "Armour sits closer to the body, on every player", f.slimArmour, true);

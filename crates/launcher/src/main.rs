@@ -3,6 +3,7 @@
 mod aot;
 mod app;
 mod auth;
+mod badges;
 mod changelog;
 mod client;
 mod game_jar;

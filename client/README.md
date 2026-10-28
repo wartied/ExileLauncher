@@ -25,6 +25,9 @@ A performance-first Fabric mod for Minecraft: Java Edition 26.3. It's the in-gam
 - **Features.** Free look (hold Left Alt), zoom (hold C; amount, toggle or hold, smooth, scroll to adjust
   and cinematic camera are all adjustable), toggle sprint and toggle sneak. Keys can be rebound right in
   the Exile menu.
+- **Badges.** Exile's badges after player names, on name tags and in the player list, with your own
+  name tag in third person if you want it (Features, Players). Who has which badge comes from
+  exiles.dev; the launcher's Account settings choose which of yours show.
 - **Armour.** Slim armour (armour fitted closer to the body, on every player) and invisible armour (hide
   your own armour so your skin shows). Both only change what you see; other players see your armour as
   normal.

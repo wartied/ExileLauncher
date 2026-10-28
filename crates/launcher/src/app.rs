@@ -145,6 +145,10 @@ enum Event {
     UpdateChecked(Result<Option<crate::update::Release>, String>),
     UpdateDownloaded(Result<(String, std::path::PathBuf), String>),
     Changelog(Result<Vec<crate::changelog::Release>, String>),
+    /// Shown badges of the looked-up accounts (absent: none).
+    Badges { uuids: Vec<String>, result: Result<HashMap<String, Vec<String>>, String> },
+    MyBadges { uuid: String, result: Result<crate::badges::Mine, String> },
+    BadgesSaved { uuid: String, result: Result<crate::badges::Mine, String> },
 }
 
 pub struct ExileApp {
@@ -190,6 +194,11 @@ pub struct ExileApp {
     /// When a background sign-in renewal was last tried (offline: every 5 minutes).
     last_refresh_try: Option<Instant>,
     changelog: settings::Changelog,
+    /// Shown badges by account UUID, from exiles.dev.
+    shown_badges: HashMap<String, Vec<String>>,
+    /// The active account's own badges, for choosing which show.
+    my_badges: settings::MyBadges,
+    badge_icons: HashMap<&'static str, TextureHandle>,
 }
 
 impl ExileApp {
@@ -237,6 +246,9 @@ impl ExileApp {
             last_update_check: None,
             last_refresh_try: None,
             changelog: Default::default(),
+            shown_badges: HashMap::new(),
+            my_badges: Default::default(),
+            badge_icons: HashMap::new(),
         };
         if let Some(id) = app.selected.clone() {
             app.refresh_mods(&id);
@@ -261,6 +273,7 @@ impl ExileApp {
                 app.others.push(session);
             }
         }
+        app.fetch_badges();
         if app.session().is_some_and(Session::needs_refresh) {
             app.refresh_session();
         }
@@ -307,6 +320,31 @@ impl ExileApp {
 
     fn face(&self, uuid: &str) -> Option<&TextureHandle> {
         self.skins.get(uuid).map(|s| &s.face)
+    }
+
+    /// Looks up the shown badges of every signed-in account.
+    fn fetch_badges(&self) {
+        let uuids: Vec<String> = self.session().into_iter().chain(&self.others).map(|s| s.uuid.clone()).collect();
+        if uuids.is_empty() {
+            return;
+        }
+        self.spawn(move || Event::Badges { result: crate::badges::lookup(&uuids).map_err(|e| format!("{e:#}")), uuids });
+    }
+
+    /// A badge's 16x16 art as a texture, loaded the first time it's needed.
+    fn badge_icon(&mut self, id: &str) -> Option<egui::TextureId> {
+        let badge = crate::badges::find(id)?;
+        if !self.badge_icons.contains_key(badge.id) {
+            let img = image::load_from_memory(badge.png).ok()?.into_rgba8();
+            let size = [img.width() as usize, img.height() as usize];
+            let texture = self.ctx.load_texture(
+                format!("badge-{}", badge.id),
+                ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
+                TextureOptions::NEAREST,
+            );
+            self.badge_icons.insert(badge.id, texture);
+        }
+        self.badge_icons.get(badge.id).map(TextureHandle::id)
     }
 
     /// Saves every signed-in account (the active one first).
@@ -680,6 +718,15 @@ impl ExileApp {
                 Event::UpdateChecked(result) => self.on_update_checked(result),
                 Event::UpdateDownloaded(result) => self.on_update_downloaded(result),
                 Event::Changelog(result) => self.changelog.finish(result),
+                Event::Badges { uuids, result: Ok(found) } => {
+                    for uuid in uuids {
+                        let shown = found.get(&uuid).cloned().unwrap_or_default();
+                        self.shown_badges.insert(uuid, shown);
+                    }
+                }
+                Event::Badges { result: Err(_), .. } => {}
+                Event::MyBadges { uuid, result } => self.my_badges_loaded(uuid, result),
+                Event::BadgesSaved { uuid, result } => self.my_badges_saved(uuid, result),
                 Event::Versions(Ok(list)) => self.versions = Versions::Ready(list),
                 Event::Versions(Err(e)) => self.versions = Versions::Failed(e),
                 Event::SignIn(result) => match result {
@@ -696,6 +743,7 @@ impl ExileApp {
                         self.fetch_skin(&session);
                         self.account = Account::SignedIn { session, refreshing: false };
                         self.persist_accounts();
+                        self.fetch_badges();
                         self.skin_view.restart();
                         // Bring the launcher back in front of the browser.
                         self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
