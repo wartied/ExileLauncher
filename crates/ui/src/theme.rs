@@ -68,6 +68,11 @@ pub fn set_dark(ctx: &egui::Context, dark: bool) {
     apply_style(ctx);
 }
 
+/// Whether the neutral Dark palette is active (rather than Exile's).
+pub fn is_dark() -> bool {
+    ACTIVE.load(Ordering::Relaxed) == 1
+}
+
 pub fn bg() -> Color32 {
     palette().bg
 }

@@ -90,6 +90,8 @@ public final class ExileConfig {
 		public boolean fullbright = false;
 		/** Vanilla menus: "vanilla", "dark" or "exile". */
 		public String menuTheme = "vanilla";
+		/** Exile's own screens and HUD: "launcher" (follow the launcher), "exile" or "dark". */
+		public String uiTheme = "launcher";
 
 		/** Your own name tag above your head in third person. */
 		public boolean ownNameTag = false;
@@ -146,6 +148,7 @@ public final class ExileConfig {
 		performance.governorTargetFps = Math.clamp(performance.governorTargetFps, 30, 360);
 		features.zoomLevel = Math.clamp(features.zoomLevel, 2, 10);
 		if (features.menuTheme == null) features.menuTheme = "vanilla";
+		if (features.uiTheme == null) features.uiTheme = "launcher";
 		for (HudSlot slot : hud.values()) {
 			if (slot.mode == null) slot.mode = "full";
 			slot.scale = Float.isFinite(slot.scale) && slot.scale > 0 ? Math.clamp(slot.scale, 0.5f, 2f) : 1f;

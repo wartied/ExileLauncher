@@ -1,6 +1,6 @@
 [package]
 name = "exile-launcher"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2024"
 description = "Exile Launcher - a fast, native Minecraft launcher"
 license = "GPL-3.0-only"

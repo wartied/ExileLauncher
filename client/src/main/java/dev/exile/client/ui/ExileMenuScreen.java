@@ -6,18 +6,16 @@ import dev.exile.client.bench.BenchHistory;
 import dev.exile.client.bench.BenchResult;
 import dev.exile.client.bench.ExileBench;
 import dev.exile.client.config.ExileConfig;
-import dev.exile.client.feature.Keybinds;
-import dev.exile.client.hud.ExileHud;
-import dev.exile.client.hud.HudElement;
-import dev.exile.client.perf.BackgroundThrottle;
-import dev.exile.client.perf.Tuning;
 import dev.exile.client.ui.Ui.Kind;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
@@ -25,11 +23,15 @@ import net.minecraft.network.chat.Component;
 /**
  * The Exile menu: HUD, features, performance, mods and benchmark in one
  * minimal panel. Opened from the pause menu or with Right Shift.
+ *
+ * <p>Settings are cards in a grid (see {@link MenuCards}): a name, a one-line
+ * summary and a switch. Cards with more to set open a detail page. Typing
+ * anywhere searches every card.
  */
 public final class ExileMenuScreen extends Screen {
 	public enum Tab {
-		HUD("HUD", "Choose what is on screen and where."),
-		FEATURES("Features", "Camera, visibility, movement and interface. All client-side."),
+		HUD("HUD", "What's on screen, and where."),
+		FEATURES("Features", "Camera, visibility, players and interface. All client-side."),
 		PERFORMANCE("Performance", "Every optimisation here was measured before it shipped."),
 		MODS("Mods", ""),
 		BENCH("Bench", "A repeatable benchmark: one warm-up lap, one measured lap.");
@@ -43,9 +45,14 @@ public final class ExileMenuScreen extends Screen {
 		}
 	}
 
-	private static final int SIDE = 128;
+	private static final int SIDE = 120;
+	private static final int CARD_H = 36;
+	private static final int GAP = 6;
+	private static final int MIN_CARD_W = 132;
+
 	private final Screen parent;
 	private final Ui ui = new Ui();
+	private final List<Card> cards = MenuCards.all();
 	private Tab tab;
 	private double scroll;
 	/** The key binding waiting for a key press, if any (see keyRow). */
@@ -56,6 +63,11 @@ public final class ExileMenuScreen extends Screen {
 	private boolean confirmBench;
 	private BenchResult lastResult;
 	private String notice;
+	/** Search text; when not empty, the content shows matching cards from every tab. */
+	private String query = "";
+	private boolean searchFocused;
+	/** The card whose detail page is showing, if any. */
+	private Card open;
 
 	public ExileMenuScreen(Screen parent) {
 		this(parent, Tab.HUD);
@@ -77,8 +89,38 @@ public final class ExileMenuScreen extends Screen {
 		scroll = 0;
 		confirmBench = false;
 		notice = null;
+		query = "";
+		open = null;
+		capturing = null;
 		if (t == Tab.MODS && mods == null) mods = ModEntries.load();
 		if (t == Tab.BENCH) history = BenchHistory.recent(6);
+	}
+
+	private boolean searching() {
+		return !query.isBlank();
+	}
+
+	private void setQuery(String q) {
+		query = q;
+		open = null;
+		capturing = null;
+		scroll = 0;
+	}
+
+	private void openCard(Card c) {
+		open = c;
+		capturing = null;
+		scroll = 0;
+	}
+
+	private void back() {
+		open = null;
+		capturing = null;
+		scroll = 0;
+	}
+
+	void openHudEditor() {
+		minecraft.gui.setScreen(new HudEditorScreen(this));
 	}
 
 	// ---------------------------------------------------------------- input
@@ -90,7 +132,13 @@ public final class ExileMenuScreen extends Screen {
 			bind(InputConstants.Type.MOUSE.getOrCreate(event.button()));
 			return true;
 		}
-		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) ui.press(event.x(), event.y());
+		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) {
+			// The search box claims the click back if it was hit.
+			searchFocused = false;
+			ui.press(event.x(), event.y());
+		}
+		// Back and forward mouse buttons step out of a detail page.
+		if (event.button() == 3 && open != null) back();
 		return true;
 	}
 
@@ -101,7 +149,47 @@ public final class ExileMenuScreen extends Screen {
 			else bind(InputConstants.getKey(event));
 			return true;
 		}
+		// Esc steps back one level: a detail page, then the search, then the menu.
+		if (event.key() == InputConstants.KEY_ESCAPE) {
+			if (open != null) {
+				back();
+				return true;
+			}
+			if (searching() || searchFocused) {
+				setQuery("");
+				searchFocused = false;
+				return true;
+			}
+			return super.keyPressed(event);
+		}
+		if (event.key() == InputConstants.KEY_F && event.hasControlDown()) {
+			searchFocused = true;
+			return true;
+		}
+		if (event.isPaste()) {
+			String clip = minecraft.keyboardHandler.getClipboard().replaceAll("\\s+", " ").strip();
+			if (!clip.isEmpty()) {
+				setQuery((query + clip).substring(0, Math.min(64, query.length() + clip.length())));
+				searchFocused = true;
+			}
+			return true;
+		}
+		if (event.key() == InputConstants.KEY_BACKSPACE && !query.isEmpty()) {
+			setQuery(event.hasControlDown() ? "" : query.substring(0, query.offsetByCodePoints(query.length(), -1)));
+			searchFocused = true;
+			return true;
+		}
 		return super.keyPressed(event);
+	}
+
+	/** Typing anywhere searches. */
+	@Override
+	public boolean charTyped(CharacterEvent event) {
+		if (capturing != null || !event.isAllowedChatCharacter()) return false;
+		if (query.isEmpty() && event.codepoint() == ' ') return true;
+		if (query.length() < 64) setQuery(query + event.codepointAsString());
+		searchFocused = true;
+		return true;
 	}
 
 	@Override
@@ -121,9 +209,20 @@ public final class ExileMenuScreen extends Screen {
 		minecraft.gui.setScreen(parent);
 	}
 
+	/**
+	 * Typing anywhere searches, so the screen takes text input for as long as
+	 * it is open. Without it the game sends no characters at all (only key
+	 * presses): they are reserved for whatever asked for text input.
+	 */
+	@Override
+	protected void init() {
+		minecraft.textInputManager().startTextInput(this);
+	}
+
 	/** Called whenever this screen goes away, including when the game quits with it open. */
 	@Override
 	public void removed() {
+		minecraft.textInputManager().stopTextInput(this);
 		capturing = null;
 		ExileConfig.get().save();
 		minecraft.options.save();
@@ -141,20 +240,58 @@ public final class ExileMenuScreen extends Screen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float a) {
 		ui.begin(g, mouseX, mouseY);
-		int pw = Math.min(width - 24, 600);
-		int ph = Math.min(height - 24, 360);
+		int pw = Math.min(width - 24, 620);
+		int ph = Math.min(height - 24, 380);
 		int px = (width - pw) / 2;
 		int py = (height - ph) / 2;
 		ui.panel(px, py, pw, ph, Theme.BG, Theme.BORDER_STRONG);
 
-		// Sidebar
+		sidebar(g, px, py, ph);
+
+		// Content
+		int cx = px + SIDE + 20;
+		int cw = pw - SIDE - 40;
+		int top = py + 18;
+		header(cx, top, cw);
+
+		int bodyTop = top + 34;
+		int bodyBottom = py + ph - 12;
+		int maxScroll = Math.max(0, contentHeight - (bodyBottom - bodyTop));
+		scroll = Math.clamp(scroll, 0, maxScroll);
+		ui.clip(cx - 4, bodyTop, cx + cw + 4, bodyBottom);
+		int y = bodyTop - (int) scroll;
+		int end;
+		if (open != null) end = detail(open, cx, y, cw);
+		else if (searching()) end = searchResults(cx, y, cw);
+		else end = switch (tab) {
+			case HUD, FEATURES -> grid(cardsIn(tab), false, cx, y, cw);
+			case PERFORMANCE -> grid(cardsIn(tab), false, cx, vsyncNote(cx, y, cw), cw);
+			case MODS -> modsTab(cx, y, cw, bodyTop, bodyBottom);
+			case BENCH -> benchTab(cx, y, cw);
+		};
+		ui.endClip();
+		contentHeight = end - y;
+		if (maxScroll > 0) scrollbar(cx + cw + 6, bodyTop, bodyBottom - bodyTop, maxScroll);
+		ui.end();
+	}
+
+	private void sidebar(GuiGraphicsExtractor g, int px, int py, int ph) {
 		g.fill(px + 1, py + 1, px + SIDE, py + ph - 1, Theme.SIDEBAR);
 		g.fill(px + SIDE, py + 1, px + SIDE + 1, py + ph - 1, Theme.BORDER);
 		brand(px + 14, py + 20);
-		int ty = py + 40;
+
+		int sx = px + 8, sw = SIDE - 16, sy = py + 34, sh = 18;
+		if (ui.searchField(sx, sy, sw, sh, query, "Search", searchFocused)) searchFocused = true;
+		if (!query.isEmpty() && ui.clearButton(sx + sw - 2, sy, sh)) {
+			setQuery("");
+			searchFocused = false;
+		}
+
+		int ty = sy + sh + 10;
 		for (Tab t : Tab.values()) {
 			int tx = px + 8, tw = SIDE - 16, th = 20;
-			boolean selected = t == tab;
+			// While searching no tab is current: results come from all of them.
+			boolean selected = t == tab && !searching();
 			boolean hovered = !selected && ui.interactive(tx, ty, tw, th);
 			if (selected) {
 				ui.rect(tx, ty, tw, th, Theme.SURFACE_ACTIVE);
@@ -169,32 +306,31 @@ public final class ExileMenuScreen extends Screen {
 		}
 		String version = FabricLoader.getInstance().getModContainer("exile").map(m -> m.getMetadata().getVersion().getFriendlyString()).orElse("");
 		ui.text("Exile Client " + version, px + 14, py + ph - 14, Theme.TEXT_FAINT);
+	}
 
-		// Content
-		int cx = px + SIDE + 20;
-		int cw = pw - SIDE - 40;
-		int top = py + 18;
+	/** Title and subtitle; on a detail page the title has a back arrow. */
+	private void header(int cx, int top, int cw) {
+		if (open != null) {
+			int tw = 10 + ui.width(Theme.bold(open.title));
+			boolean hovered = ui.interactive(cx - 2, top - 4, tw + 4, 16);
+			int color = hovered ? Theme.TEXT : Theme.TEXT_DIM;
+			ui.chevronBack(cx, top + 4, color);
+			ui.bold(open.title, cx + 10, top + 4, Theme.TEXT);
+			if (ui.click(cx - 2, top - 4, tw + 4, 16)) back();
+			String from = searching() ? "Search" : open.tab.title + ", " + open.section;
+			ui.text(ui.fit(from + " · " + open.description, cw), cx, top + 18, Theme.TEXT_DIM);
+			return;
+		}
+		if (searching()) {
+			long n = cards.stream().filter(c -> c.matches(query)).count();
+			ui.bold("Search", cx, top + 4, Theme.TEXT);
+			String sub = n == 0 ? "Nothing matches “" + query.strip() + "”" : n + (n == 1 ? " setting" : " settings");
+			ui.text(ui.fit(sub, cw), cx, top + 18, Theme.TEXT_DIM);
+			return;
+		}
 		ui.bold(tab.title, cx, top + 4, Theme.TEXT);
 		String sub = tab == Tab.MODS ? (mods == null ? "" : mods.size() + " mods loaded") : tab.subtitle;
 		ui.text(ui.fit(sub, cw), cx, top + 18, Theme.TEXT_DIM);
-
-		int bodyTop = top + 34;
-		int bodyBottom = py + ph - 12;
-		int maxScroll = Math.max(0, contentHeight - (bodyBottom - bodyTop));
-		scroll = Math.clamp(scroll, 0, maxScroll);
-		ui.clip(cx - 4, bodyTop, cx + cw + 4, bodyBottom);
-		int y = bodyTop - (int) scroll;
-		int end = switch (tab) {
-			case HUD -> hudTab(cx, y, cw);
-			case FEATURES -> featuresTab(cx, y, cw);
-			case PERFORMANCE -> performanceTab(cx, y, cw);
-			case MODS -> modsTab(cx, y, cw, bodyTop, bodyBottom);
-			case BENCH -> benchTab(cx, y, cw);
-		};
-		ui.endClip();
-		contentHeight = end - y;
-		if (maxScroll > 0) scrollbar(cx + cw + 6, bodyTop, bodyBottom - bodyTop, maxScroll);
-		ui.end();
 	}
 
 	/** Letter-spaced wordmark, like the launcher's. */
@@ -208,126 +344,143 @@ public final class ExileMenuScreen extends Screen {
 		ui.graphics().fill(x, ty, x + 2, ty + thumb, Theme.BORDER_STRONG);
 	}
 
-	// ---------------------------------------------------------------- tabs
+	// ---------------------------------------------------------------- cards
 
-	private int hudTab(int x, int y, int w) {
-		var cfg = ExileConfig.get();
-		// Layout row: label on the left, the action on the right.
-		boolean inWorld = minecraft.player != null;
-		ui.text("Layout", x + 8, y + 9, Theme.TEXT);
-		ui.text(inWorld ? "Drag elements to where you want them" : "Join a world to edit the layout", x + 8, y + 20, Theme.TEXT_FAINT);
-		if (ui.button(x + w - 70, y + 5, 62, 18, "Edit", Kind.PRIMARY, inWorld)) minecraft.gui.setScreen(new HudEditorScreen(this));
-		y += 32;
-		boolean bg = ui.toggleRow(x, y, w, "Backdrop", "A subtle dark box behind each element", cfg.hudBackground, true);
-		if (bg != cfg.hudBackground) cfg.hudBackground = bg;
-		y += 32;
-		ui.section("Elements", x + 8, y + 4);
-		y += 12;
-		for (HudElement e : ExileHud.ELEMENTS) {
-			var slot = e.slot();
-			boolean on = ui.toggleRow(x, y, w, e.name, e.description, slot.enabled, true);
-			if (on != slot.enabled) slot.enabled = on;
-			y += 30;
-		}
-		return y;
+	private List<Card> cardsIn(Tab t) {
+		return cards.stream().filter(c -> c.tab == t).toList();
 	}
 
-	private int featuresTab(int x, int y, int w) {
-		var f = ExileConfig.get().features;
-		var o = minecraft.options;
-
-		ui.section("Camera", x + 8, y + 4);
-		y += 12;
-		f.freelook = ui.toggleRow(x, y, w, "Free look", "Hold the key to look around without turning", f.freelook, true);
-		y += 30;
-		if (f.freelook) y = keyRow(x, y, w, "Free look key", Keybinds.freelook);
-		f.zoom = ui.toggleRow(x, y, w, "Zoom", "Hold the key to magnify the view", f.zoom, true);
-		y += 30;
-		if (f.zoom) {
-			y = keyRow(x, y, w, "Zoom key", Keybinds.zoom);
-			y = sliderRow(x, y, w, "Zoom amount", "zoom", f.zoomLevel, 2, 10, 1, "x", v -> f.zoomLevel = v);
-			f.zoomToggle = ui.toggleRow(x, y, w, "Toggle zoom", "Press once to zoom and again to stop, instead of holding", f.zoomToggle, true);
-			y += 30;
-			f.zoomSmooth = ui.toggleRow(x, y, w, "Smooth zoom", "Ease in and out instead of jumping", f.zoomSmooth, true);
-			y += 30;
-			f.zoomScroll = ui.toggleRow(x, y, w, "Scroll to adjust", "Mouse wheel zooms further in or out while zoomed", f.zoomScroll, true);
-			y += 30;
-			f.zoomCinematic = ui.toggleRow(x, y, w, "Cinematic camera", "Smooth, drifting camera movement while zoomed", f.zoomCinematic, true);
-			y += 30;
+	private int searchResults(int x, int y, int w) {
+		List<Card> found = cards.stream().filter(c -> c.matches(query)).toList();
+		if (found.isEmpty()) {
+			return y + ui.paragraph("Try another word, or press Esc to go back.", x + 2, y + 4, w, Theme.TEXT_FAINT) + 8;
 		}
+		return grid(found, true, x, y, w);
+	}
 
-		y += 6;
-		ui.section("Visibility", x + 8, y + 4);
-		y += 12;
-		f.fullbright = ui.toggleRow(x, y, w, "Fullbright", "See everything as if in full light", f.fullbright, true);
-		y += 30;
-		y = keyRow(x, y, w, "Fullbright key", Keybinds.fullbright);
-		f.clearWater = ui.toggleRow(x, y, w, "Clear water", "See as far underwater as on land", f.clearWater, true);
-		y += 30;
-		f.clearLava = ui.toggleRow(x, y, w, "Clear lava", "See through lava when you're in it", f.clearLava, true);
-		y += 30;
-		f.lowFire = ui.toggleRow(x, y, w, "Low fire", "Flames on screen sit lower when you're burning", f.lowFire, true);
-		y += 30;
-		f.lowShield = ui.toggleRow(x, y, w, "Low shield", "Your shield sits lower, so it blocks less of the view", f.lowShield, true);
-		y += 30;
+	/**
+	 * Cards in a grid, under a heading per section (per tab for search
+	 * results). As many columns as fit; every card the same size.
+	 */
+	private int grid(List<Card> list, boolean byTab, int x, int y, int w) {
+		int cols = Math.max(1, (w + GAP) / (MIN_CARD_W + GAP));
+		int cardW = (w - GAP * (cols - 1)) / cols;
+		String heading = null;
+		int col = 0;
+		for (Card c : list) {
+			String h = byTab ? c.tab.title : c.section;
+			if (!h.equals(heading)) {
+				if (heading != null) y += (col > 0 ? CARD_H : -GAP) + 12;
+				heading = h;
+				col = 0;
+				ui.section(h, x + 2, y + 4);
+				y += 12;
+			}
+			card(c, x + col * (cardW + GAP), y, cardW);
+			if (++col == cols) {
+				col = 0;
+				y += CARD_H + GAP;
+			}
+		}
+		return y + (col > 0 ? CARD_H : 0) + 6;
+	}
 
-		y += 6;
-		ui.section("Movement", x + 8, y + 4);
-		y += 12;
-		boolean sprint = ui.toggleRow(x, y, w, "Toggle sprint", "Press sprint once to keep sprinting", o.toggleSprint().get(), true);
-		if (sprint != o.toggleSprint().get()) o.toggleSprint().set(sprint);
-		y += 30;
-		boolean sneak = ui.toggleRow(x, y, w, "Toggle sneak", "Press sneak once to keep sneaking", o.toggleCrouch().get(), true);
-		if (sneak != o.toggleCrouch().get()) o.toggleCrouch().set(sneak);
-		y += 30;
+	private void card(Card c, int x, int y, int w) {
+		boolean locked = c.locked.getAsBoolean();
+		boolean on = c.hasToggle() && c.on.getAsBoolean();
+		boolean opens = c.detail != null || c.action != null;
+		boolean clickable = c.action != null ? c.actionEnabled.getAsBoolean() : opens || (c.hasToggle() && !locked);
+		boolean hovered = clickable ? ui.interactive(x, y, w, CARD_H) : ui.hover(x, y, w, CARD_H);
+		ui.panel(x, y, w, CARD_H, hovered ? Theme.SURFACE_HOVER : Theme.SURFACE, hovered ? Theme.BORDER_STRONG : Theme.BORDER);
 
-		y += 6;
-		ui.section("Players", x + 8, y + 4);
-		y += 12;
-		f.ownNameTag = ui.toggleRow(x, y, w, "Your name tag", "Show your name above your head in third person", f.ownNameTag, true);
-		y += 30;
-		f.badges = ui.toggleRow(x, y, w, "Badges", "Exile badges next to player names, from exiles.dev", f.badges, true);
-		y += 30;
+		int right = x + w - 8;
+		int titleRoom = w - 16;
+		if (c.hasToggle()) {
+			boolean next = ui.toggle(right - 22, y + 6, on, !locked);
+			if (next != on) c.set.accept(next);
+			titleRoom -= 28;
+		} else if (opens) {
+			ui.chevron(right - 4, y + 12, hovered ? Theme.TEXT : Theme.TEXT_FAINT);
+			titleRoom -= 10;
+		}
+		// Off switches read dimmer, so what's on stands out across the grid.
+		boolean bright = !c.hasToggle() || on;
+		int titleColor = c.action != null && !clickable ? Theme.TEXT_FAINT : bright ? Theme.TEXT : Theme.TEXT_DIM;
+		ui.text(ui.fit(c.title, titleRoom), x + 8, y + 12, titleColor);
 
-		y += 6;
-		ui.section("Armour", x + 8, y + 4);
-		y += 12;
-		f.slimArmour = ui.toggleRow(x, y, w, "Slim armour", "Armour sits closer to the body, on every player", f.slimArmour, true);
-		y += 30;
-		f.invisibleArmour = ui.toggleRow(
-			x, y, w, "Invisible armour", "Hide your own armour so your skin shows. Only you see this", f.invisibleArmour, true
-		);
-		y += 30;
+		String summary = c.summaryText();
+		int summaryRoom = w - 16;
+		if (c.hasToggle() && c.detail != null) {
+			ui.chevron(right - 4, y + 25, hovered ? Theme.TEXT_DIM : Theme.TEXT_FAINT);
+			summaryRoom -= 10;
+		}
+		String shown = ui.fit(summary, summaryRoom);
+		ui.text(shown, x + 8, y + 25, Theme.TEXT_FAINT);
 
-		y += 6;
-		ui.section("Interface", x + 8, y + 4);
-		y += 12;
-		ui.text("Menu theme", x + 8, y + 9, Theme.TEXT);
-		ui.text(ui.fit("Darker vanilla menus", w - 200), x + 8, y + 20, Theme.TEXT_FAINT);
-		String[] themes = {"Vanilla", "Dark", "Exile"};
-		int theme = MenuTheme.mode().ordinal();
-		int picked = ui.segmented(x + w - 8 - ui.segmentedWidth(themes), y + 5, 18, themes, theme);
-		if (picked != theme) MenuTheme.set(MenuTheme.Mode.values()[picked]);
-		y += 32;
-		f.saturationOverlay = ui.toggleRow(
-			x, y, w, "Saturation on hunger bar", "Gold outlines show how much saturation is left", f.saturationOverlay, true
-		);
-		y += 30;
-		f.replaceVanillaEffects = ui.toggleRow(
-			x, y, w, "Replace effect icons", "Hide vanilla's effect icons while Exile's list is on", f.replaceVanillaEffects, true
-		);
-		y += 30;
-		ui.text("Exile's keys are also under Options, Controls, Exile.", x + 8, y + 8, Theme.TEXT_FAINT);
-		return y + 18;
+		// The full description, when the card doesn't already show all of it.
+		if (hovered && (!shown.equals(c.description) || locked)) {
+			ui.tooltip(c, locked ? c.description + " (set by launch options)" : c.description);
+		}
+		// The switch above claimed its own clicks; the rest of the card is one button.
+		if (clickable && ui.click(x, y, w, CARD_H)) {
+			if (c.action != null) c.action.accept(this);
+			else if (c.detail != null) openCard(c);
+			else c.set.accept(!on);
+		}
+	}
+
+	/** A card's own page: its switch, then its settings. */
+	private int detail(Card c, int x, int y, int w) {
+		if (c.hasToggle()) {
+			boolean locked = c.locked.getAsBoolean();
+			boolean on = c.on.getAsBoolean();
+			boolean next = ui.toggleRow(x, y, w, "Enabled", locked ? "Set by launch options" : null, on, !locked);
+			if (next != on) c.set.accept(next);
+			y += locked ? 30 : 22;
+			ui.hline(x + 8, x + w - 8, y + 2, Theme.BORDER);
+			y += 8;
+		}
+		return c.detail == null ? y : c.detail.draw(this, x, y, w);
+	}
+
+	private int vsyncNote(int x, int y, int w) {
+		// VSync caps everything below at the display's refresh rate, which is
+		// easy to mistake for one of these settings holding the frame rate.
+		if (!minecraft.options.enableVsync().get()) return y;
+		var monitor = minecraft.getWindow().findBestMonitor();
+		int hz = monitor == null ? 0 : Math.round(monitor.currentMode().getRefreshRate());
+		String cap = hz > 0 ? hz + " Hz" : "refresh rate";
+		return y + ui.paragraph("VSync is on, so FPS stops at your display's " + cap + ". Turn it off in Video Settings to go higher.", x + 2, y + 2, w - 4, Theme.TEXT_DIM) + 10;
+	}
+
+	// ------------------------------------------------------- detail rows (used by MenuCards)
+
+	/** A labelled switch. Returns where the next row starts. */
+	int toggleRow(int x, int y, int w, String label, String detail, boolean on, Consumer<Boolean> set) {
+		boolean next = ui.toggleRow(x, y, w, label, detail, on, true);
+		if (next != on) set.accept(next);
+		return y + (detail == null ? 22 : 30);
+	}
+
+	/** One of a few choices, on the right of a label. */
+	int choiceRow(int x, int y, int w, String label, String detail, String[] options, int active, IntConsumer set) {
+		int h = detail == null ? 22 : 30;
+		int cy = detail == null ? y + h / 2 : y + 9;
+		int segW = ui.segmentedWidth(options);
+		ui.text(label, x + 8, cy, Theme.TEXT);
+		if (detail != null) ui.text(ui.fit(detail, w - segW - 24), x + 8, y + 20, Theme.TEXT_FAINT);
+		int picked = ui.segmented(x + w - 8 - segW, y + (h - 18) / 2, 18, options, active);
+		if (picked != active) set.accept(picked);
+		return y + h + 2;
 	}
 
 	/**
 	 * A key binding with its key on a button. Click it, then press a key (or a
 	 * side or middle mouse button) to rebind; Esc or clicking again cancels.
 	 */
-	private int keyRow(int x, int y, int w, String label, KeyMapping key) {
+	int keyRow(int x, int y, int w, String label, KeyMapping key) {
 		boolean listening = capturing == key;
-		ui.text(label, x + 8, y + 10, Theme.TEXT_DIM);
+		ui.text(label, x + 8, y + 10, Theme.TEXT);
 		String name = listening ? "Press a key" : key.getTranslatedKeyMessage().getString();
 		if (ui.button(x + w - 98, y + 1, 90, 18, ui.fit(name, 82), listening ? Kind.PRIMARY : Kind.NORMAL, true)) {
 			capturing = listening ? null : key;
@@ -342,61 +495,21 @@ public final class ExileMenuScreen extends Screen {
 		capturing = null;
 	}
 
-	private int performanceTab(int x, int y, int w) {
-		var p = ExileConfig.get().performance;
-		ui.section("Frame rate", x + 8, y + 4);
-		y += 12;
-		// VSync caps everything below at the display's refresh rate, which is
-		// easy to mistake for one of these settings holding the frame rate.
-		if (minecraft.options.enableVsync().get()) {
-			var monitor = minecraft.getWindow().findBestMonitor();
-			int hz = monitor == null ? 0 : Math.round(monitor.currentMode().getRefreshRate());
-			String cap = hz > 0 ? hz + " Hz" : "refresh rate";
-			y += ui.paragraph("VSync is on, so FPS stops at your display's " + cap + ". Turn it off in Video Settings to go higher.", x + 8, y + 4, w - 16, Theme.TEXT_DIM) + 8;
-		}
-		boolean bt = ui.toggleRow(
-			x, y, w, BackgroundThrottle.SWITCH.title, "Limit FPS in another window (about 70% less GPU power in testing)",
-			BackgroundThrottle.SWITCH.enabled(), !BackgroundThrottle.SWITCH.forced()
-		);
-		if (bt != BackgroundThrottle.SWITCH.enabled()) BackgroundThrottle.SWITCH.set(bt);
-		y += 30;
-		if (bt) {
-			y = sliderRow(x, y, w, "Background FPS", "bg", p.backgroundFps, 5, 120, 5, " fps", v -> p.backgroundFps = v);
-		}
-		var fb = ExileHud.FRAME_BUDGET.slot();
-		fb.enabled = ui.toggleRow(x, y, w, "Frame Budget overlay", "Live breakdown of where each frame's time goes", fb.enabled, true);
-		y += 30;
-		p.governor = ui.toggleRow(
-			x, y, w, "Hold a target frame rate", "Trims the least noticeable settings first when FPS drops", p.governor, true
-		);
-		y += 30;
-		if (p.governor) {
-			y = sliderRow(x, y, w, "Target FPS", "target", p.governorTargetFps, 30, 240, 10, " fps", v -> p.governorTargetFps = v);
-		}
-
-		List<Tuning.Switch> opts = Tuning.all().stream().filter(s -> s != BackgroundThrottle.SWITCH).toList();
-		if (!opts.isEmpty()) {
-			y += 6;
-			ui.section("Optimisations", x + 8, y + 4);
-			y += 12;
-			for (Tuning.Switch s : opts) {
-				String detail = s.forced() ? s.description + " (set by launch options)" : s.description;
-				boolean on = ui.toggleRow(x, y, w, s.title, detail, s.enabled(), !s.forced());
-				if (on != s.enabled()) s.set(on);
-				y += 30;
-			}
-		}
-		return y;
-	}
-
-	private int sliderRow(int x, int y, int w, String label, Object id, int value, int min, int max, int step, String unit, java.util.function.IntConsumer set) {
-		ui.text(label, x + 8, y + 10, Theme.TEXT_DIM);
+	int sliderRow(int x, int y, int w, String label, Object id, int value, int min, int max, int step, String unit, IntConsumer set) {
+		ui.text(label, x + 8, y + 10, Theme.TEXT);
 		ui.textRight(value + unit, x + w - 8, y + 10, Theme.TEXT);
 		int sx = x + 110;
 		int next = ui.slider(id, sx, y + 4, w - 110 - 60, value, min, max, step);
 		if (next != value) set.accept(next);
 		return y + 24;
 	}
+
+	/** Faint explanatory text. */
+	int note(int x, int y, int w, String text) {
+		return y + 4 + ui.paragraph(text, x + 8, y + 4, w - 16, Theme.TEXT_FAINT) + 6;
+	}
+
+	// ---------------------------------------------------------------- tabs
 
 	private int modsTab(int x, int y, int w, int visibleTop, int visibleBottom) {
 		for (ModEntries.Entry m : mods) {

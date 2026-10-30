@@ -34,12 +34,47 @@ public final class Ui {
 		this.mx = mouseX;
 		this.my = mouseY;
 		this.pointer = false;
+		this.tipAsked = false;
 	}
 
-	/** Drops a click nothing claimed and sets the cursor. */
+	/** Drops a click nothing claimed, draws the tooltip and sets the cursor. */
 	public void end() {
 		clickPending = false;
+		// Nothing with a tooltip hovered this frame: the delay starts over.
+		if (!tipAsked) tipOwner = null;
+		if (tip != null) drawTooltip();
+		tip = null;
 		if (pointer) g.requestCursor(CursorTypes.POINTING_HAND);
+	}
+
+	// Tooltip: asked for while drawing, drawn last so it sits above everything.
+	private String tip;
+	private Object tipOwner;
+	private long tipSince;
+	private boolean tipAsked;
+	private static final long TIP_DELAY_MS = 450;
+
+	/** Shows {@code text} by the cursor once {@code owner} has been hovered for a moment. */
+	public void tooltip(Object owner, String text) {
+		tipAsked = true;
+		long now = System.currentTimeMillis();
+		if (owner != tipOwner) {
+			tipOwner = owner;
+			tipSince = now;
+		}
+		if (now - tipSince >= TIP_DELAY_MS) tip = text;
+	}
+
+	private void drawTooltip() {
+		g.nextStratum();
+		var lines = font.split(Theme.text(tip), 180);
+		int w = 0;
+		for (var l : lines) w = Math.max(w, font.width(l));
+		int h = lines.size() * 10 + 8;
+		int x = Math.min(mx + 10, g.guiWidth() - w - 14);
+		int y = my + 14 + h > g.guiHeight() ? my - h - 4 : my + 14;
+		panel(x, y, w + 12, h, Theme.SURFACE_ACTIVE, Theme.BORDER_STRONG);
+		for (int i = 0; i < lines.size(); i++) g.text(font, lines.get(i), x + 6, y + 5 + i * 10, Theme.TEXT, false);
 	}
 
 	public void press(double x, double y) {
@@ -271,6 +306,53 @@ public final class Ui {
 		// The whole row toggles, not just the switch.
 		if (next == on && enabled && interactive(x, y, w, h) && click(x, y, w, h)) next = !on;
 		return next;
+	}
+
+	/**
+	 * A search box showing {@code query} (typing goes to it from the screen).
+	 * Draws a caret while {@code focused}; a × clears it. Returns true when
+	 * the box was clicked.
+	 */
+	public boolean searchField(int x, int y, int w, int h, String query, String placeholder, boolean focused) {
+		boolean hovered = interactive(x, y, w, h);
+		panel(x, y, w, h, focused ? Theme.SURFACE_ACTIVE : hovered ? Theme.SURFACE_HOVER : Theme.SURFACE, focused ? Theme.ACCENT : hovered ? Theme.BORDER_STRONG : Theme.BORDER);
+		int cy = y + h / 2;
+		int tx = x + 7;
+		int room = w - 14 - (query.isEmpty() ? 0 : 12);
+		if (query.isEmpty()) {
+			text(fit(placeholder, room), tx, cy, Theme.TEXT_FAINT);
+		} else {
+			// Long queries scroll: the end, where the caret is, stays visible.
+			String shown = query;
+			while (shown.length() > 1 && width(shown) > room) shown = shown.substring(1);
+			tx += text(shown, tx, cy, Theme.TEXT);
+		}
+		if (focused && (System.currentTimeMillis() / 500) % 2 == 0) g.fill(tx + 1, cy - 5, tx + 2, cy + 5, Theme.TEXT);
+		return click(x, y, w, h);
+	}
+
+	/** A small × at the right of a search box; returns true when clicked. */
+	public boolean clearButton(int right, int y, int h) {
+		int x = right - 14;
+		boolean hovered = interactive(x, y, 14, h);
+		textCentered("×", x + 6, y + h / 2, hovered ? Theme.TEXT : Theme.TEXT_FAINT);
+		return click(x, y, 14, h);
+	}
+
+	/** Small right-pointing arrow (4x7): "opens more". */
+	public void chevron(int x, int centerY, int color) {
+		for (int i = 0; i < 4; i++) {
+			g.fill(x + i, centerY - 3 + i, x + i + 1, centerY - 2 + i, color);
+			g.fill(x + i, centerY + 3 - i, x + i + 1, centerY + 4 - i, color);
+		}
+	}
+
+	/** Small left-pointing arrow (4x7): "back". */
+	public void chevronBack(int x, int centerY, int color) {
+		for (int i = 0; i < 4; i++) {
+			g.fill(x + 3 - i, centerY - 3 + i, x + 4 - i, centerY - 2 + i, color);
+			g.fill(x + 3 - i, centerY + 3 - i, x + 4 - i, centerY + 4 - i, color);
+		}
 	}
 
 	/** Horizontal slider. Returns the (stepped) value. */

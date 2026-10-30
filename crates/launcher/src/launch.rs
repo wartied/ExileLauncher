@@ -240,7 +240,11 @@ pub fn spawn(inst: &Instance, heap_mb: u64, auth: &LaunchAuth, steps: &[(&str, D
         .current_dir(inst.game_dir())
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log));
+        .stderr(Stdio::from(log))
+        // The Exile Client's menus can match the launcher's palette. An
+        // environment variable, not a -D flag: the AOT cache is keyed on the
+        // command line, and a theme switch shouldn't rebuild it.
+        .env("EXILE_LAUNCHER_THEME", if crate::theme::is_dark() { "dark" } else { "exile" });
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

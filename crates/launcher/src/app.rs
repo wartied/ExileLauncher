@@ -133,7 +133,9 @@ enum TaskOutcome {
 
 enum Event {
     Versions(Result<Vec<ManifestEntry>, String>),
-    SignIn(Result<Session, String>),
+    /// `cancel` is the flag of the attempt this result belongs to, so results
+    /// of a cancelled or replaced attempt can be told apart and ignored.
+    SignIn { cancel: Arc<AtomicBool>, result: Result<Session, String> },
     Refreshed(Result<Session, (String, bool)>),
     Skin { uuid: String, skin: Option<skin::Skin> },
     Profile { uuid: String, profile: Option<auth::Profile> },
@@ -349,9 +351,15 @@ impl ExileApp {
 
     /// Saves every signed-in account (the active one first).
     fn persist_accounts(&mut self) {
-        let mut accounts: Vec<Session> = self.session().cloned().into_iter().collect();
+        // During a sign-in the account set aside is still the active one.
+        let active = match &self.account {
+            Account::SignedIn { session, .. } => Some(session),
+            Account::SigningIn { previous, .. } => previous.as_deref(),
+            Account::SignedOut => None,
+        };
+        let mut accounts: Vec<Session> = active.cloned().into_iter().collect();
         accounts.extend(self.others.iter().cloned());
-        let saved = auth::Accounts { active: self.session().map(|s| s.uuid.clone()), accounts };
+        let saved = auth::Accounts { active: active.map(|s| s.uuid.clone()), accounts };
         if let Err(e) = auth::save_accounts(&saved) {
             self.show_message("Couldn't save your accounts", format!("{e:#}"));
         }
@@ -474,22 +482,33 @@ impl ExileApp {
         self.account = Account::SigningIn { cancel: cancel.clone(), previous };
         self.spawn(move || {
             let result = auth::sign_in(&client_id, &cancel);
-            Event::SignIn(match result {
+            let result = match result {
                 Ok(s) => Ok(s),
                 Err(e) if net::is_cancelled(&e) => Err(String::new()),
                 Err(e) => Err(format!("{e:#}")),
-            })
+            };
+            Event::SignIn { cancel, result }
         });
     }
 
     /// Stops a sign-in in progress and goes back to the account before it.
+    /// Does nothing if no sign-in is in progress.
     fn cancel_sign_in(&mut self) {
+        if !matches!(self.account, Account::SigningIn { .. }) {
+            return;
+        }
         if let Account::SigningIn { cancel, previous } = std::mem::replace(&mut self.account, Account::SignedOut) {
             cancel.store(true, Ordering::Relaxed);
             if let Some(session) = previous {
                 self.account = Account::SignedIn { session: *session, refreshing: false };
             }
         }
+    }
+
+    /// Whether `cancel` belongs to the sign-in currently in progress.
+    fn is_current_sign_in(&self, cancel: &Arc<AtomicBool>) -> bool {
+        matches!(&self.account, Account::SigningIn { cancel: current, .. } if Arc::ptr_eq(current, cancel))
+            && !cancel.load(Ordering::Relaxed)
     }
 
     /// Signs the active account out of Exile; the next one (if any) takes over.
@@ -729,7 +748,10 @@ impl ExileApp {
                 Event::BadgesSaved { uuid, result } => self.my_badges_saved(uuid, result),
                 Event::Versions(Ok(list)) => self.versions = Versions::Ready(list),
                 Event::Versions(Err(e)) => self.versions = Versions::Failed(e),
-                Event::SignIn(result) => match result {
+                // A cancelled or replaced attempt: the account it set aside
+                // is already back (or a newer attempt holds it), so leave it.
+                Event::SignIn { cancel, .. } if !self.is_current_sign_in(&cancel) => {}
+                Event::SignIn { result, .. } => match result {
                     Ok(session) => {
                         // The account that was active before goes into the switcher.
                         if let Account::SigningIn { previous: Some(previous), .. } =
