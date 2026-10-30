@@ -311,14 +311,16 @@ public final class ExileMenuScreen extends Screen {
 	/** Title and subtitle; on a detail page the title has a back arrow. */
 	private void header(int cx, int top, int cw) {
 		if (open != null) {
-			int tw = 10 + ui.width(Theme.bold(open.title));
+			// Drawn from a local: clicking back clears `open` partway through this frame.
+			Card c = open;
+			int tw = 10 + ui.width(Theme.bold(c.title));
 			boolean hovered = ui.interactive(cx - 2, top - 4, tw + 4, 16);
 			int color = hovered ? Theme.TEXT : Theme.TEXT_DIM;
 			ui.chevronBack(cx, top + 4, color);
-			ui.bold(open.title, cx + 10, top + 4, Theme.TEXT);
+			ui.bold(c.title, cx + 10, top + 4, Theme.TEXT);
+			String from = searching() ? "Search" : c.tab.title + ", " + c.section;
+			ui.text(ui.fit(from + " · " + c.description, cw), cx, top + 18, Theme.TEXT_DIM);
 			if (ui.click(cx - 2, top - 4, tw + 4, 16)) back();
-			String from = searching() ? "Search" : open.tab.title + ", " + open.section;
-			ui.text(ui.fit(from + " · " + open.description, cw), cx, top + 18, Theme.TEXT_DIM);
 			return;
 		}
 		if (searching()) {
